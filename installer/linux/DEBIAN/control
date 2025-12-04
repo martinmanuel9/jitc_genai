@@ -1,0 +1,23 @@
+Package: genai-research
+Version: VERSION_PLACEHOLDER
+Section: science
+Priority: optional
+Architecture: amd64
+Depends: docker-ce (>= 24.0.0) | docker.io (>= 24.0.0), docker-compose-plugin (>= 2.20.0)
+Recommends: nvidia-docker2, curl
+Maintainer: Your Organization <support@example.com>
+Homepage: https://github.com/martinmanuel9/jitc_genai
+Description: AI-powered research and verification system
+ GenAI Research provides comprehensive AI-powered research and
+ verification capabilities using advanced AI models. Features include:
+ .
+ - Multi-agent test plan generation with Actor-Critic system
+ - RAG-enhanced document analysis with citation tracking
+ - Test card creation with Word export
+ - Support for cloud LLMs (OpenAI) and local models (Ollama)
+ - US-based model compliance (Meta, Microsoft, Snowflake)
+ - Complete on-premises deployment option
+ .
+ The system uses Docker Compose for orchestration and includes FastAPI backend,
+ Streamlit web UI, PostgreSQL database, ChromaDB vector store, Redis cache,
+ and Celery background worker.

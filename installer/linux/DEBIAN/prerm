@@ -1,0 +1,17 @@
+#!/bin/bash
+###############################################################################
+# Pre-removal script for GenAI Research (Debian/Ubuntu)
+###############################################################################
+
+set -e
+
+# Stop and disable service
+if systemctl is-active --quiet jitc_genai; then
+    systemctl stop jitc_genai
+fi
+
+if systemctl is-enabled --quiet jitc_genai; then
+    systemctl disable jitc_genai
+fi
+
+exit 0

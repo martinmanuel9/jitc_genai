@@ -1,0 +1,700 @@
+name: Build Installers
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+    paths:
+      - 'VERSION'  # Only trigger when VERSION file changes
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: write  # Required for creating releases and uploading assets
+
+env:
+  PRODUCT_NAME: "JITC GenAI"
+  PRODUCT_SHORT_NAME: "jitc_genai"
+
+jobs:
+  prepare:
+    name: Prepare Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual workflow dispatch
+            VERSION="${{ github.event.inputs.version }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            # Tag push (v1.0.0)
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            # Push to main - read from VERSION file
+            VERSION=$(cat VERSION)
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            echo "Error: Invalid version format: $VERSION"
+            echo "Expected format: MAJOR.MINOR.PATCH (e.g., 1.0.0 or 1.0.0-beta.1)"
+            exit 1
+          fi
+          echo "Version format valid: $VERSION"
+
+      - name: Check if release exists
+        id: check_release
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          echo "Checking for release with tag: $TAG"
+
+          # Use GitHub API to check if release exists
+          HTTP_CODE=$(curl -s -o /tmp/release.json -w "%{http_code}" \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "Release $TAG already exists"
+            echo "exists=true" >> $GITHUB_OUTPUT
+            UPLOAD_URL=$(cat /tmp/release.json | jq -r .upload_url)
+            echo "upload_url=$UPLOAD_URL" >> $GITHUB_OUTPUT
+          else
+            echo "Release $TAG does not exist (HTTP $HTTP_CODE)"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        id: create_release
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v$VERSION"
+
+          gh release create "$TAG" \
+            --title "Release v$VERSION" \
+            --notes "# GenAI Research v$VERSION
+
+          ## Installation
+
+          ### Windows
+          Download and run \`genai-research-$VERSION.msi\`
+
+          ### Linux (Debian/Ubuntu) - x86_64
+          \`\`\`bash
+          sudo dpkg -i genai-research_${VERSION}_amd64.deb
+          sudo apt-get install -f  # Install dependencies if needed
+          \`\`\`
+
+          ### Linux (Debian/Ubuntu) - ARM64
+          \`\`\`bash
+          sudo dpkg -i genai-research_${VERSION}_arm64.deb
+          sudo apt-get install -f  # Install dependencies if needed
+          \`\`\`
+
+          ### Linux (RHEL/CentOS/Fedora) - x86_64
+          \`\`\`bash
+          sudo rpm -i genai-research-$VERSION.x86_64.rpm
+          \`\`\`
+
+          ### Linux (RHEL/CentOS/Fedora) - ARM64
+          \`\`\`bash
+          sudo rpm -i genai-research-$VERSION.aarch64.rpm
+          \`\`\`
+
+          ### macOS (Intel)
+          Open \`genai-research-$VERSION-x86_64.dmg\` and drag to Applications
+
+          ### macOS (Apple Silicon)
+          Open \`genai-research-$VERSION-arm64.dmg\` and drag to Applications
+
+          ## Prerequisites
+          - Docker 24.0.0 or later
+          - Docker Compose 2.20.0 or later
+          - 8 GB RAM minimum
+          - 50 GB disk space
+          - 4 CPU cores recommended
+
+          ## What's New
+          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-windows:
+    name: Build Windows Installer
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install WiX Toolset
+        run: |
+          choco install wixtoolset -y
+          echo "C:\Program Files (x86)\WiX Toolset v3.11\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Create staging directory
+        shell: pwsh
+        run: |
+          $version = "${{ needs.prepare.outputs.version }}"
+          $stagingDir = "installer/windows/staging"
+
+          # Create staging directory
+          New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
+
+          # Copy application files
+          Copy-Item -Recurse src $stagingDir
+          Copy-Item -Recurse scripts $stagingDir
+          Copy-Item -Recurse installer/windows/scripts/* $stagingDir/scripts -Force
+          Copy-Item docker-compose.yml $stagingDir
+          Copy-Item Dockerfile.base $stagingDir
+          Copy-Item pyproject.toml $stagingDir
+          Copy-Item poetry.lock $stagingDir
+          Copy-Item run $stagingDir
+          Copy-Item .env.template $stagingDir
+          Copy-Item VERSION $stagingDir
+          Copy-Item CHANGELOG.md $stagingDir
+          Copy-Item README.md $stagingDir
+          Copy-Item INSTALL.md $stagingDir
+          Copy-Item LICENSE.rtf $stagingDir
+
+          Write-Host "Staging directory created with all files"
+          Get-ChildItem -Path $stagingDir -Recurse | Select-Object -First 20
+
+      - name: Harvest files with heat.exe
+        shell: pwsh
+        run: |
+          cd installer/windows
+
+          # Use heat to harvest the staging directory
+          & heat.exe dir staging `
+            -cg ApplicationFiles `
+            -gg `
+            -sfrag `
+            -srd `
+            -dr INSTALLFOLDER `
+            -var "var.StagingDir" `
+            -out FilesFragment.wxs
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "heat.exe failed"
+            exit 1
+          }
+
+          Write-Host "Files harvested successfully"
+
+      - name: Update version in WiX
+        shell: pwsh
+        run: |
+          $version = "${{ needs.prepare.outputs.version }}"
+          $stagingPath = (Resolve-Path "installer/windows/staging").Path
+
+          # Update Product.wxs
+          (Get-Content installer/windows/Product.wxs) -replace 'VERSION_PLACEHOLDER', $version | Set-Content installer/windows/Product_build.wxs
+
+          # Copy icon file to installer directory if it exists
+          if (Test-Path "installer/windows/app-icon.ico") {
+              Write-Host "Icon file found, will be included in installer"
+          } else {
+              Write-Host "Warning: Icon file not found at installer/windows/app-icon.ico"
+          }
+
+          Write-Host "Version updated to: $version"
+          Write-Host "Staging path: $stagingPath"
+
+      - name: Build WiX installer
+        shell: pwsh
+        run: |
+          cd installer/windows
+          $stagingPath = (Resolve-Path "staging").Path
+          $version = "${{ needs.prepare.outputs.version }}"
+
+          Write-Host "Building MSI with staging path: $stagingPath"
+
+          # Compile Product.wxs
+          & candle.exe Product_build.wxs `
+            -dStagingDir="$stagingPath" `
+            -dVersion=$version `
+            -arch x64 `
+            -ext WixUIExtension `
+            -ext WixUtilExtension
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "candle.exe failed for Product.wxs"
+            exit 1
+          }
+
+          # Compile FilesFragment.wxs
+          & candle.exe FilesFragment.wxs `
+            -dStagingDir="$stagingPath" `
+            -dVersion=$version `
+            -arch x64 `
+            -ext WixUIExtension `
+            -ext WixUtilExtension
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "candle.exe failed for FilesFragment.wxs"
+            exit 1
+          }
+
+          # Compile CustomUI.wxs
+          & candle.exe CustomUI.wxs `
+            -dStagingDir="$stagingPath" `
+            -dVersion=$version `
+            -arch x64 `
+            -ext WixUIExtension `
+            -ext WixUtilExtension
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "candle.exe failed for CustomUI.wxs"
+            exit 1
+          }
+
+          # Link to create MSI
+          & light.exe Product_build.wixobj FilesFragment.wixobj CustomUI.wixobj `
+            -out ../../genai-research-$version.msi `
+            -ext WixUIExtension `
+            -ext WixUtilExtension `
+            -cultures:en-US
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "light.exe failed"
+            exit 1
+          }
+
+          Write-Host "MSI built successfully"
+
+      - name: Upload Windows Installer
+        shell: pwsh
+        run: |
+          $VERSION = "${{ needs.prepare.outputs.version }}"
+          $TAG = "v$VERSION"
+          $ASSET_PATH = "genai-research-$VERSION.msi"
+
+          # Delete existing asset if it exists
+          gh release delete-asset $TAG $ASSET_PATH -y -R ${{ github.repository }} 2>$null
+
+          # Upload new asset
+          gh release upload $TAG $ASSET_PATH -R ${{ github.repository }} --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux-deb:
+    name: Build Linux DEB Package (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev build-essential
+
+      - name: Prepare DEB package structure
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          ARCH="${{ matrix.arch }}"
+          PKG_DIR="genai-research_${VERSION}_${ARCH}"
+
+          # Create directory structure
+          mkdir -p "$PKG_DIR/opt/jitc_genai"
+          mkdir -p "$PKG_DIR/DEBIAN"
+
+          # Copy application files
+          cp -r src "$PKG_DIR/opt/jitc_genai/"
+          cp -r scripts "$PKG_DIR/opt/jitc_genai/"
+          cp docker-compose.yml "$PKG_DIR/opt/jitc_genai/"
+          cp Dockerfile.base "$PKG_DIR/opt/jitc_genai/"
+          cp pyproject.toml "$PKG_DIR/opt/jitc_genai/"
+          cp poetry.lock "$PKG_DIR/opt/jitc_genai/"
+          cp run "$PKG_DIR/opt/jitc_genai/"
+          chmod +x "$PKG_DIR/opt/jitc_genai/run"
+          cp .env.template "$PKG_DIR/opt/jitc_genai/.env.template"
+          cp .env.template "$PKG_DIR/opt/jitc_genai/.env"
+          cp VERSION "$PKG_DIR/opt/jitc_genai/"
+          cp CHANGELOG.md "$PKG_DIR/opt/jitc_genai/"
+          cp README.md "$PKG_DIR/opt/jitc_genai/"
+          cp INSTALL.md "$PKG_DIR/opt/jitc_genai/"
+
+          # Copy DEBIAN control files
+          cp installer/linux/DEBIAN/* "$PKG_DIR/DEBIAN/"
+
+          # Update version and architecture in control file
+          sed -i "s/VERSION_PLACEHOLDER/$VERSION/g" "$PKG_DIR/DEBIAN/control"
+          sed -i "s/Architecture: amd64/Architecture: $ARCH/g" "$PKG_DIR/DEBIAN/control"
+
+          # Set permissions
+          chmod 755 "$PKG_DIR/DEBIAN/postinst"
+          chmod 755 "$PKG_DIR/DEBIAN/prerm"
+          chmod 755 "$PKG_DIR/DEBIAN/postrm"
+
+          # Build DEB package
+          dpkg-deb --build "$PKG_DIR"
+
+      - name: Upload Linux DEB Package
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="v$VERSION"
+          ARCH="${{ matrix.arch }}"
+          ASSET_PATH="genai-research_${VERSION}_${ARCH}.deb"
+
+          # Upload with clobber to replace if exists
+          gh release upload "$TAG" "$ASSET_PATH" -R ${{ github.repository }} --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux-rpm:
+    name: Build Linux RPM Package (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            rpm_arch: x86_64
+          - arch: aarch64
+            rpm_arch: aarch64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install RPM tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+      - name: Copy RPM post-install script
+        run: |
+          # Copy the RPM postinst script to scripts directory
+          cp installer/linux/rpm-postinst.sh scripts/
+
+      - name: Create RPM spec file
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          RPM_ARCH="${{ matrix.rpm_arch }}"
+          cat > genai-research.spec <<'SPECEOF'
+          Name:           genai-research
+          Version:        %{_version}
+          Release:        1%{?dist}
+          Summary:        AI-powered research and verification system
+          License:        Proprietary
+          URL:            https://github.com/${{ github.repository }}
+          Source0:        %{name}-%{version}.tar.gz
+          Requires:       docker >= 24.0.0
+          BuildArch:      noarch
+
+          %description
+          GenAI Research provides comprehensive AI-powered research and
+          verification capabilities using advanced AI models. Features include:
+          - Multi-agent test plan generation with Actor-Critic system
+          - RAG-enhanced document analysis with citation tracking
+          - Test card creation with Word export
+          - Support for cloud LLMs (OpenAI) and local models (Ollama)
+          - US-based model compliance (Meta, Microsoft, Snowflake)
+          - Complete on-premises deployment option
+
+          %prep
+          %setup -q -n %{name}-%{version}
+
+          %build
+          # No build needed - Python/Docker application
+
+          %install
+          mkdir -p %{buildroot}/opt/jitc_genai
+          cp -r src %{buildroot}/opt/jitc_genai/
+          cp -r scripts %{buildroot}/opt/jitc_genai/
+          cp docker-compose.yml %{buildroot}/opt/jitc_genai/
+          cp Dockerfile.base %{buildroot}/opt/jitc_genai/
+          cp pyproject.toml %{buildroot}/opt/jitc_genai/
+          cp poetry.lock %{buildroot}/opt/jitc_genai/
+          cp run %{buildroot}/opt/jitc_genai/
+          chmod +x %{buildroot}/opt/jitc_genai/run
+          cp .env.template %{buildroot}/opt/jitc_genai/.env.template
+          cp .env.template %{buildroot}/opt/jitc_genai/.env
+          cp VERSION %{buildroot}/opt/jitc_genai/
+          cp CHANGELOG.md %{buildroot}/opt/jitc_genai/
+          cp README.md %{buildroot}/opt/jitc_genai/
+          cp INSTALL.md %{buildroot}/opt/jitc_genai/
+
+          %files
+          %defattr(-,root,root,-)
+          /opt/jitc_genai
+
+          %post
+          # Run post-installation script
+          if [ -f /opt/jitc_genai/scripts/rpm-postinst.sh ]; then
+              bash /opt/jitc_genai/scripts/rpm-postinst.sh
+          fi
+
+          %preun
+          # Stop and disable service before uninstall
+          if systemctl is-active --quiet jitc_genai; then
+              systemctl stop jitc_genai
+          fi
+          if systemctl is-enabled --quiet jitc_genai; then
+              systemctl disable jitc_genai
+          fi
+
+          %postun
+          # Remove systemd service file on purge
+          if [ $1 -eq 0 ]; then
+              rm -f /etc/systemd/system/jitc_genai.service
+              systemctl daemon-reload
+          fi
+
+          %changelog
+          * $(date +'%a %b %d %Y') GitHub Actions <actions@github.com> - %{version}-1
+          - Release %{version}
+          SPECEOF
+
+          # Replace version placeholder
+          sed -i "s/%{_version}/$VERSION/g" genai-research.spec
+
+      - name: Build RPM package
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          RPM_ARCH="${{ matrix.rpm_arch }}"
+          mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          cp genai-research.spec ~/rpmbuild/SPECS/
+
+          # Create source tarball with proper directory structure
+          mkdir -p genai-research-$VERSION
+          cp -r src scripts docker-compose.yml Dockerfile.base pyproject.toml poetry.lock run .env.template VERSION CHANGELOG.md README.md INSTALL.md genai-research-$VERSION/
+          tar czf ~/rpmbuild/SOURCES/genai-research-$VERSION.tar.gz genai-research-$VERSION
+          rm -rf genai-research-$VERSION
+
+          # Build RPM (noarch since this is a script/docker package with no compiled binaries)
+          rpmbuild -ba ~/rpmbuild/SPECS/genai-research.spec
+
+          # Copy built RPM and rename to target architecture for distribution
+          NOARCH_RPM=$(find ~/rpmbuild/RPMS -name "*.noarch.rpm" | head -1)
+          cp "$NOARCH_RPM" "./genai-research-$VERSION.${RPM_ARCH}.rpm"
+
+      - name: Upload Linux RPM Package
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="v$VERSION"
+          RPM_ARCH="${{ matrix.rpm_arch }}"
+          RPM_FILE="genai-research-$VERSION.${RPM_ARCH}.rpm"
+
+          # Upload with clobber to replace if exists
+          gh release upload "$TAG" "$RPM_FILE" -R ${{ github.repository }} --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    name: Build macOS DMG (${{ matrix.arch }})
+    needs: prepare
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-13
+          - arch: arm64
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create DMG
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          ARCH="${{ matrix.arch }}"
+          APP_NAME="GenAI Research"
+          DMG_NAME="genai-research-$VERSION-$ARCH.dmg"
+
+          # Create app bundle structure
+          mkdir -p "build/$APP_NAME.app/Contents/MacOS"
+          mkdir -p "build/$APP_NAME.app/Contents/Resources"
+
+          # Copy application files
+          cp -r src "build/$APP_NAME.app/Contents/Resources/"
+          cp -r scripts "build/$APP_NAME.app/Contents/Resources/"
+          cp docker-compose.yml "build/$APP_NAME.app/Contents/Resources/"
+          cp Dockerfile.base "build/$APP_NAME.app/Contents/Resources/"
+          cp pyproject.toml "build/$APP_NAME.app/Contents/Resources/"
+          cp poetry.lock "build/$APP_NAME.app/Contents/Resources/"
+          cp run "build/$APP_NAME.app/Contents/Resources/"
+          chmod +x "build/$APP_NAME.app/Contents/Resources/run"
+          cp .env.template "build/$APP_NAME.app/Contents/Resources/.env.template"
+          cp .env.template "build/$APP_NAME.app/Contents/Resources/.env"
+          cp VERSION "build/$APP_NAME.app/Contents/Resources/"
+          cp CHANGELOG.md "build/$APP_NAME.app/Contents/Resources/"
+          cp README.md "build/$APP_NAME.app/Contents/Resources/"
+          cp INSTALL.md "build/$APP_NAME.app/Contents/Resources/"
+
+          # Create Info.plist with architecture info
+          cat > "build/$APP_NAME.app/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleName</key>
+              <string>GenAI Research</string>
+              <key>CFBundleVersion</key>
+              <string>$VERSION</string>
+              <key>CFBundleShortVersionString</key>
+              <string>$VERSION</string>
+              <key>CFBundleExecutable</key>
+              <string>launcher</string>
+              <key>LSArchitecturePriority</key>
+              <array>
+                  <string>$ARCH</string>
+              </array>
+          </dict>
+          </plist>
+          EOF
+
+          # Create launcher script with setup
+          cat > "build/$APP_NAME.app/Contents/MacOS/launcher" <<'EOF'
+          #!/bin/bash
+          RESOURCES_DIR="$(dirname "$0")/../Resources"
+          cd "$RESOURCES_DIR"
+
+          # Run setup on first launch if .env doesn't exist
+          if [ ! -f "$RESOURCES_DIR/.env" ] || [ ! -s "$RESOURCES_DIR/.env" ]; then
+              osascript -e 'tell app "Terminal" to do script "cd '"$RESOURCES_DIR"' && ./scripts/setup-env.sh"'
+              exit 0
+          fi
+
+          # Check if Docker is running
+          if ! docker info &> /dev/null; then
+              osascript -e 'display dialog "Docker Desktop is not running. Please start Docker Desktop first." buttons {"OK"} default button "OK"'
+              open -a "Docker"
+              exit 1
+          fi
+
+          # Start services
+          docker compose up -d
+
+          # Wait for services
+          sleep 5
+
+          # Open web interface
+          open http://localhost:8501
+          EOF
+          chmod +x "build/$APP_NAME.app/Contents/MacOS/launcher"
+
+          # Create setup script launcher
+          cat > "build/$APP_NAME.app/Contents/MacOS/setup" <<'EOF'
+          #!/bin/bash
+          RESOURCES_DIR="$(dirname "$0")/../Resources"
+          cd "$RESOURCES_DIR"
+          osascript -e 'tell app "Terminal" to do script "cd '"$RESOURCES_DIR"' && ./scripts/setup-env.sh && exit"'
+          EOF
+          chmod +x "build/$APP_NAME.app/Contents/MacOS/setup"
+
+          # Create DMG
+          hdiutil create -volname "$APP_NAME" -srcfolder build -ov -format UDZO "$DMG_NAME"
+
+      - name: Upload macOS DMG
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="v$VERSION"
+          ARCH="${{ matrix.arch }}"
+          ASSET_PATH="genai-research-$VERSION-$ARCH.dmg"
+
+          # Upload with clobber to replace if exists
+          gh release upload "$TAG" "$ASSET_PATH" -R ${{ github.repository }} --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  checksums:
+    name: Generate Checksums
+    needs: [prepare, build-windows, build-linux-deb, build-linux-rpm, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download release assets
+        run: |
+          TAG="v${{ needs.prepare.outputs.version }}"
+          VERSION="${{ needs.prepare.outputs.version }}"
+
+          # Download all release assets
+          gh release download "$TAG" --pattern "*.msi" -R ${{ github.repository }} || true
+          gh release download "$TAG" --pattern "*.deb" -R ${{ github.repository }} || true
+          gh release download "$TAG" --pattern "*.rpm" -R ${{ github.repository }} || true
+          gh release download "$TAG" --pattern "*.dmg" -R ${{ github.repository }} || true
+
+          ls -la
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate checksums
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+
+          # Wait a bit for uploads to complete
+          echo "Waiting for assets to be uploaded..."
+          sleep 10
+
+          # Download again to make sure we have the latest
+          TAG="v$VERSION"
+          gh release download "$TAG" --pattern "*.msi" -R ${{ github.repository }} --clobber || true
+          gh release download "$TAG" --pattern "*.deb" -R ${{ github.repository }} --clobber || true
+          gh release download "$TAG" --pattern "*.rpm" -R ${{ github.repository }} --clobber || true
+          gh release download "$TAG" --pattern "*.dmg" -R ${{ github.repository }} --clobber || true
+
+          ls -la
+
+          # Generate checksums only for files that exist
+          rm -f checksums-sha256.txt
+
+          # Windows (x64 only)
+          [ -f "genai-research-$VERSION.msi" ] && sha256sum genai-research-$VERSION.msi >> checksums-sha256.txt
+
+          # Linux DEB (amd64 and arm64)
+          [ -f "genai-research_${VERSION}_amd64.deb" ] && sha256sum genai-research_${VERSION}_amd64.deb >> checksums-sha256.txt
+          [ -f "genai-research_${VERSION}_arm64.deb" ] && sha256sum genai-research_${VERSION}_arm64.deb >> checksums-sha256.txt
+
+          # Linux RPM (x86_64 and aarch64)
+          [ -f "genai-research-$VERSION.x86_64.rpm" ] && sha256sum genai-research-$VERSION.x86_64.rpm >> checksums-sha256.txt
+          [ -f "genai-research-$VERSION.aarch64.rpm" ] && sha256sum genai-research-$VERSION.aarch64.rpm >> checksums-sha256.txt
+
+          # macOS DMG (x86_64 and arm64)
+          [ -f "genai-research-$VERSION-x86_64.dmg" ] && sha256sum genai-research-$VERSION-x86_64.dmg >> checksums-sha256.txt
+          [ -f "genai-research-$VERSION-arm64.dmg" ] && sha256sum genai-research-$VERSION-arm64.dmg >> checksums-sha256.txt
+
+          if [ -f checksums-sha256.txt ]; then
+            cat checksums-sha256.txt
+          else
+            echo "No files found to checksum"
+            exit 1
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload checksums
+        if: hashFiles('checksums-sha256.txt') != ''
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="v$VERSION"
+
+          # Upload with clobber to replace if exists
+          gh release upload "$TAG" checksums-sha256.txt -R ${{ github.repository }} --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,77 @@
+{
+  "product": {
+    "name": "GenAI Research",
+    "short_name": "genai-research",
+    "company": "Your Organization",
+    "description": "AI-powered research and verification system with on-premises LLM support",
+    "website": "https://github.com/martinmanuel9/jitc_genai",
+    "license": "Proprietary",
+    "support_email": "support@example.com"
+  },
+  "version_info": {
+    "version_file": "../VERSION",
+    "changelog_file": "../CHANGELOG.md"
+  },
+  "requirements": {
+    "docker": {
+      "min_version": "24.0.0",
+      "required": true,
+      "description": "Docker Engine is required to run all services"
+    },
+    "docker_compose": {
+      "min_version": "2.20.0",
+      "required": true,
+      "description": "Docker Compose V2 is required for orchestration"
+    },
+    "disk_space_gb": 50,
+    "ram_gb": 8,
+    "cpu_cores": 4
+  },
+  "components": {
+    "fastapi": {
+      "name": "FastAPI Backend",
+      "port": 9020,
+      "required": true
+    },
+    "streamlit": {
+      "name": "Streamlit Web UI",
+      "port": 8501,
+      "required": true
+    },
+    "postgres": {
+      "name": "PostgreSQL Database",
+      "port": 5432,
+      "required": true
+    },
+    "chromadb": {
+      "name": "ChromaDB Vector Store",
+      "port": 8001,
+      "required": true
+    },
+    "redis": {
+      "name": "Redis Cache",
+      "port": 6379,
+      "required": true
+    },
+    "celery": {
+      "name": "Celery Background Worker",
+      "required": true
+    },
+    "ollama": {
+      "name": "Ollama Local LLM (Native)",
+      "port": 11434,
+      "required": false,
+      "note": "Install separately for local model support"
+    }
+  },
+  "install_paths": {
+    "windows": "C:\\Program Files\\GenAI Research",
+    "linux": "/opt/jitc_genai",
+    "macos": "/Applications/GenAI Research.app/Contents"
+  },
+  "data_paths": {
+    "windows": "%PROGRAMDATA%\\GenAI Research",
+    "linux": "/var/lib/jitc_genai",
+    "macos": "~/Library/Application Support/GenAI Research"
+  }
+}

@@ -1,0 +1,37 @@
+# Environment files
+.env
+.env.*
+*.env
+# But include the template
+!.env.template
+
+volumes/**
+data/**
+models/**
+logs/**
+stored_images/**
+backups/**
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg

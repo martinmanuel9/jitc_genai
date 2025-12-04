@@ -1,0 +1,38 @@
+#!/bin/bash
+###############################################################################
+# Post-removal script for GenAI Research (Debian/Ubuntu)
+###############################################################################
+
+set -e
+
+case "$1" in
+    purge)
+        # Remove systemd service file
+        rm -f /etc/systemd/system/jitc_genai.service
+        systemctl daemon-reload
+
+        # Ask user if they want to remove data
+        echo ""
+        echo "Do you want to remove all data (database, vectors, logs)?"
+        echo "Data location: /var/lib/jitc_genai"
+        read -p "Remove data? (y/N): " -n 1 -r
+        echo ""
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            rm -rf /var/lib/jitc_genai
+            echo "Data removed."
+        else
+            echo "Data preserved at /var/lib/jitc_genai"
+        fi
+
+        # Remove service user
+        if id "genai" &>/dev/null; then
+            userdel genai 2>/dev/null || true
+        fi
+        ;;
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        # Keep data on regular remove
+        echo "Application removed. Data preserved at /var/lib/jitc_genai"
+        ;;
+esac
+
+exit 0

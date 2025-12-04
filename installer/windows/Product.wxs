@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <?define ProductName = "GenAI Research" ?>
+  <?define ProductShortName = "genai-research" ?>
+  <?define ProductVersion = "VERSION_PLACEHOLDER" ?>
+  <?define Manufacturer = "Your Organization" ?>
+  <?define UpgradeCode = "34c3ed39-12a4-44d1-b571-74e406f9beb1" ?>
+
+  <Product Id="*"
+           Name="$(var.ProductName)"
+           Language="1033"
+           Version="$(var.ProductVersion)"
+           Manufacturer="$(var.Manufacturer)"
+           UpgradeCode="$(var.UpgradeCode)">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="$(var.ProductName) Installer"
+             Comments="AI-powered research and verification system"
+             Manufacturer="$(var.Manufacturer)"
+             Platform="x64" />
+
+    <!-- Upgrade logic -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Properties -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/martinmanuel9/jitc_genai" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/martinmanuel9/jitc_genai" />
+
+    <!-- Add/Remove Programs Icon -->
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Icon Id="AppIcon" SourceFile="app-icon.ico" />
+
+    <!-- Feature definition -->
+    <Feature Id="ProductFeature" Title="GenAI Research" Level="1">
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentGroupRef Id="ShortcutComponents" />
+    </Feature>
+
+    <!--
+    =========================================================================
+    CUSTOM ACTIONS - Copy .env and run setup script
+    =========================================================================
+    1. CopyEnvFile: Copies the user's .env file to the install directory
+    2. LaunchSetupScript: Opens a VISIBLE command window to run setup
+
+    The setup window opens AFTER the MSI installation completes, so users
+    can see Docker build progress, container startup, etc.
+    =========================================================================
+    -->
+
+    <!--
+    Copy .env file using cmd.exe copy command
+    For deferred WixQuietExec, the property name must match the CustomAction Id
+    -->
+    <CustomAction Id="CopyEnvFile_SetProperty"
+                  Property="CopyEnvFile"
+                  Value="&quot;[SystemFolder]cmd.exe&quot; /c copy /Y &quot;[ENV_FILE_PATH]&quot; &quot;[INSTALLFOLDER].env&quot;" />
+
+    <CustomAction Id="CopyEnvFile"
+                  BinaryKey="WixCA"
+                  DllEntry="WixQuietExec"
+                  Execute="deferred"
+                  Return="ignore"
+                  Impersonate="no" />
+
+    <!--
+    Launch a VISIBLE command window for setup.
+    This is an IMMEDIATE action that runs at the end of the UI sequence.
+    It uses "start" to create a new window that persists independently.
+    -->
+    <CustomAction Id="LaunchSetupScript"
+                  Property="WixShellExecTarget"
+                  Value="[INSTALLFOLDER]scripts\launch-setup.cmd"
+                  Execute="immediate" />
+
+    <CustomAction Id="RunSetupVisible"
+                  BinaryKey="WixCA"
+                  DllEntry="WixShellExec"
+                  Execute="immediate"
+                  Return="ignore"
+                  Impersonate="yes" />
+
+    <InstallExecuteSequence>
+      <!-- Copy .env file during installation -->
+      <Custom Action="CopyEnvFile_SetProperty" Before="CopyEnvFile"><![CDATA[ENV_FILE_PATH <> "" AND NOT Installed]]></Custom>
+      <Custom Action="CopyEnvFile" After="InstallFiles"><![CDATA[ENV_FILE_PATH <> "" AND NOT Installed]]></Custom>
+    </InstallExecuteSequence>
+
+    <!-- Launch the setup window from the UI sequence after install completes -->
+    <InstallUISequence>
+      <Custom Action="LaunchSetupScript" After="ExecuteAction"><![CDATA[NOT Installed]]></Custom>
+      <Custom Action="RunSetupVisible" After="LaunchSetupScript"><![CDATA[NOT Installed]]></Custom>
+    </InstallUISequence>
+
+    <!-- UI -->
+    <UIRef Id="CustomInstallDir" />
+    <UIRef Id="WixUI_ErrorProgressText" />
+
+    <!-- Progress text for custom actions -->
+    <UI>
+      <ProgressText Action="CopyEnvFile">Copying environment configuration...</ProgressText>
+      <ProgressText Action="RunSetupScript">Opening setup window - Please watch the PowerShell window for progress...</ProgressText>
+    </UI>
+
+    <!-- License Agreement -->
+    <WixVariable Id="WixUILicenseRtf" Value="LICENSE.rtf" />
+
+  </Product>
+
+  <!-- Directory structure -->
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="GenAI Research" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="GenAI Research"/>
+      </Directory>
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+  </Fragment>
+
+  <!-- Shortcut Components -->
+  <Fragment>
+    <ComponentGroup Id="ShortcutComponents">
+      <!-- Start Menu Shortcut -->
+      <Component Id="ApplicationShortcut" Directory="ApplicationProgramsFolder" Guid="C1D2E3F4-A5B6-4C7D-8E9F-0A1B2C3D4E5F">
+        <Shortcut Id="ApplicationStartMenuShortcut"
+                  Name="GenAI Research"
+                  Description="Open GenAI Research Web Interface"
+                  Target="[System64Folder]WindowsPowerShell\v1.0\powershell.exe"
+                  Arguments='-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "Start-Process \"http://localhost:8501\""'
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="AppIcon"
+                  IconIndex="0" />
+
+        <Shortcut Id="ConfigurationShortcut"
+                  Name="Configure Environment"
+                  Description="Configure GenAI Research environment variables"
+                  Target="[System64Folder]WindowsPowerShell\v1.0\powershell.exe"
+                  Arguments='-NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]scripts\setup-env.ps1&quot; -InstallDir &quot;[INSTALLFOLDER]&quot;'
+                  WorkingDirectory="INSTALLFOLDER" />
+
+        <Shortcut Id="StopServiceShortcut"
+                  Name="Stop Services"
+                  Description="Stop GenAI Research services"
+                  Target="[System64Folder]cmd.exe"
+                  Arguments='/k "cd /d &quot;[INSTALLFOLDER]&quot; &amp;&amp; docker compose down"'
+                  WorkingDirectory="INSTALLFOLDER" />
+
+        <Shortcut Id="FirstTimeSetupShortcut"
+                  Name="First-Time Setup"
+                  Description="Run the first-time setup wizard"
+                  Target="[System64Folder]WindowsPowerShell\v1.0\powershell.exe"
+                  Arguments='-NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]scripts\post-install.ps1&quot; -InstallDir &quot;[INSTALLFOLDER]&quot;'
+                  WorkingDirectory="INSTALLFOLDER" />
+
+        <Shortcut Id="DownloadModelsShortcut"
+                  Name="Download Models"
+                  Description="Download AI models for local use (requires Ollama)"
+                  Target="[System64Folder]WindowsPowerShell\v1.0\powershell.exe"
+                  Arguments='-NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]scripts\pull-ollama-models.ps1&quot;'
+                  WorkingDirectory="INSTALLFOLDER" />
+
+        <RemoveFolder Id="CleanUpShortCut" Directory="ApplicationProgramsFolder" On="uninstall"/>
+        <RegistryValue Root="HKCU"
+                       Key="Software\[Manufacturer]\[ProductName]"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes"/>
+      </Component>
+
+      <!-- Desktop Shortcut (optional) -->
+      <Component Id="DesktopShortcut" Directory="DesktopFolder" Guid="D2E3F4A5-B6C7-4D8E-9F0A-1B2C3D4E5F6A">
+        <Shortcut Id="ApplicationDesktopShortcut"
+                  Name="GenAI Research"
+                  Description="Open GenAI Research Web Interface"
+                  Target="[System64Folder]WindowsPowerShell\v1.0\powershell.exe"
+                  Arguments='-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "Start-Process \"http://localhost:8501\""'
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="AppIcon"
+                  IconIndex="0" />
+        <RemoveFolder Id="CleanUpDesktopShortCut" On="uninstall"/>
+        <RegistryValue Root="HKCU"
+                       Key="Software\[Manufacturer]\[ProductName]"
+                       Name="desktop_shortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes"/>
+      </Component>
+
+      <!-- Desktop Shortcut for Download AI Models -->
+      <Component Id="DownloadModelsDesktopShortcut" Directory="DesktopFolder" Guid="E3F4A5B6-C7D8-4E9F-0A1B-2C3D4E5F6A7B">
+        <Shortcut Id="DownloadModelsDesktop"
+                  Name="Download AI Models"
+                  Description="Download recommended AI models for GenAI Research"
+                  Target="[System64Folder]WindowsPowerShell\v1.0\powershell.exe"
+                  Arguments='-NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]scripts\Download-AI-Models.ps1&quot;'
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\[Manufacturer]\[ProductName]"
+                       Name="download_models_shortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes"/>
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

@@ -1,0 +1,62 @@
+[tool.poetry]
+name = "genai"
+version = "0.1.0"
+description = ""
+authors = ["Martin Lopez <78863793+martinmanuel9@users.noreply.github.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.13"
+chromadb = {extras = ["server"], version = "^0.6.3"}
+langchain = "^0.3.15"
+langchain-community = "^0.3.15"
+langchain-core = "^0.3.31"
+pypdf2 = "^3.0.1"
+accelerate = "^1.3.0"
+bitsandbytes = "0.42.0"
+llama-index = "^0.12.14"
+huggingface-hub = "^0.27.1"
+openai = "^1.60.2"
+pytest = "^8.3.4"
+streamlit = "^1.42.0"
+requests = "^2.32.3"
+fitz = "^0.0.1.dev2"
+docx = "^0.2.4"
+pymupdf = "^1.25.3"
+python-docx = "^1.1.2"
+sentence-transformers = "^3.4.1"
+langchain-openai = "^0.3.6"
+langchain-anthropic = "^0.3.0"
+sqlalchemy = "^2.0.38"
+psycopg2-binary = "^2.9.10"
+langchain-chroma = "^0.2.2"
+langsmith = "^0.3.10"
+langchain-huggingface = "^0.1.2"
+torch = "2.2.2"
+langchain-ollama = "^0.3.3"
+numpy = "<2.0"
+pillow = "^11.2.1"
+pandas = "^2.3.0"
+openpyxl = "^3.1.5"
+python-multipart = "^0.0.20"
+fpdf = "^1.7.2"
+markitdown = {extras = ["mcp"], version = "^0.1.2"}
+markitdown-mcp = "^0.0.1a4"
+pytesseract = "^0.3.13"
+opencv-python = "^4.11.0.86"
+transformers = "^4.36.0"
+pdf2image = "^1.17.0"
+poppler-utils = "^0.1.0"
+redis = "^6.2.0"
+markdown = "^3.8.2"
+readability = "^0.3.2"
+plotly = "^6.3.0"
+tiktoken = "^0.8.0"
+pypandoc = "^1.13"
+celery = {extras = ["redis"], version = "^5.4.0"}
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

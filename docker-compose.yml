@@ -1,0 +1,186 @@
+services:
+  base-poetry-deps:
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+    image: base-poetry-deps
+    mem_limit: 4g
+  postgres:
+    image: postgres:17
+    container_name: postgres_db
+    restart: always
+    ports:
+      - "5432:5432"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/backup
+    networks:
+      - ai_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+  chromadb:
+    image: chromadb/chroma:0.5.23
+    container_name: chromadb
+    restart: unless-stopped
+    mem_limit: 2g
+    cpu_count: 2
+    ports:
+      - "127.0.0.1:8001:8000"  # IMPORTANT: Localhost only for security (map host 8001 -> container 8000)
+    environment:
+      # Core settings
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+      - ANONYMIZED_TELEMETRY=False
+
+      # Authentication (optional for local, required for EC2)
+      - CHROMA_SERVER_AUTHN_PROVIDER=${CHROMA_AUTH_PROVIDER:-}
+      - CHROMA_SERVER_AUTHN_CREDENTIALS=${CHROMA_AUTH_TOKEN:-}
+
+      # CORS for local development
+      - CHROMA_SERVER_CORS_ALLOW_ORIGINS=["http://localhost:9020","http://localhost:8501"]
+    volumes:
+      # IMPORTANT: Note the different internal path
+      - chromadata:/chroma/chroma
+      - ./data/chromadb:/chroma/backup
+    networks:
+      - ai_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  fastapi:
+    build:
+      context: ./src/fastapi
+      dockerfile: Dockerfile.fastapi
+    container_name: fastapi
+    mem_limit: 2g
+    ports:
+      - "9020:9020"
+    env_file:
+      - .env
+    environment:
+      - ANONYMIZED_TELEMETRY=False
+    depends_on:
+      base-poetry-deps:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      # ollama removed - using native Ollama on host at http://127.0.0.1:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Docker's special host-gateway - allows access to host's Ollama
+    volumes:
+      - huggingface_cache:/app/huggingface_cache
+      - ./data/huggingface_cache:/app/cache_backup
+      - ./src/llm_config:/app/llm_config:ro
+      - ./stored_images:/app/stored_images
+    networks:
+      - ai_network
+
+  streamlit:
+    build:
+      context: ./src/streamlit
+      dockerfile: Dockerfile.streamlit
+    container_name: streamlit
+    mem_limit: 1g
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    depends_on:
+      - base-poetry-deps
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Docker's special host-gateway - allows access to host's Ollama
+    volumes:
+      - ./src/llm_config:/app/llm_config:ro
+      - ./stored_images:/app/stored_images:ro
+      - ./src/streamlit/components:/app/components
+      - ./src/streamlit/pages:/app/pages
+      - ./src/streamlit/services:/app/services
+      - ./src/streamlit/app_lib:/app/app_lib
+      - ./src/streamlit/config:/app/config
+      - ./src/streamlit/models:/app/models
+    networks:
+      - ai_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    mem_limit: 512m
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - ai_network
+
+  celery-worker:
+    build:
+      context: ./src/fastapi
+      dockerfile: Dockerfile.fastapi
+    container_name: celery_worker
+    mem_limit: 2g
+    command: celery -A celery_app worker --loglevel=info --concurrency=2
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CELERY_REDIS_DB=1
+      - ANONYMIZED_TELEMETRY=False
+    depends_on:
+      base-poetry-deps:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      # ollama removed - using native Ollama on host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Docker's special host-gateway - allows access to host's Ollama
+    volumes:
+      - huggingface_cache:/app/huggingface_cache
+      - ./data/huggingface_cache:/app/cache_backup
+      - ./src/llm_config:/app/llm_config:ro
+      - ./stored_images:/app/stored_images
+    networks:
+      - ai_network
+    restart: unless-stopped
+
+networks:
+  ai_network:
+    driver: bridge
+
+volumes:
+  pgdata:
+    driver: local
+    name: genai_postgres_data
+  chromadata:
+    driver: local
+    name: genai_chroma_data
+  huggingface_cache:
+    driver: local
+    name: genai_hf_cache
+  redis-data:
+    driver: local
+    name: genai_redis_data
+  ollama-data:
+    driver: local
+    name: genai_ollama_data

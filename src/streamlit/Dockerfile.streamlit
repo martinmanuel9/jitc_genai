@@ -1,0 +1,9 @@
+FROM base-poetry-deps
+
+WORKDIR /app
+
+COPY . .
+
+ENV PYTHONPATH="/app"
+
+CMD ["streamlit", "run", "Home.py", "--server.port=8501", "--server.address=0.0.0.0"]
