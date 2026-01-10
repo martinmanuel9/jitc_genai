@@ -1,7 +1,7 @@
 import os
 import time
 from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_ollama import OllamaEmbeddings
 from services.llm_utils import get_llm
 from services.llm_invoker import LLMInvoker
 # from config.model_registry import (
@@ -29,7 +29,12 @@ class LLMService:
         """
         self.db = db
         self.chromadb_dir = os.getenv("CHROMADB_PERSIST_DIRECTORY", "/app/chroma_db_data")
-        self.embedding_function = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+        # Use Ollama embeddings (snowflake-arctic-embed-m) instead of HuggingFace
+        ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+        self.embedding_function = OllamaEmbeddings(
+            model="snowflake-arctic-embed-m",
+            base_url=ollama_url
+        )
         self.n_results = int(os.getenv("N_RESULTS", "3"))
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         self.compliance_agents = []

@@ -11,7 +11,7 @@ from functools import lru_cache
 import chromadb
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.schema import Document
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_ollama import OllamaEmbeddings
 from services.llm_utils import get_llm
 from services.llm_invoker import LLMInvoker
 
@@ -43,9 +43,11 @@ class RAGService:
         self._max_retries = max_retries
         self._retry_delay = retry_delay
 
-        # Embedding function (keep existing)
-        self.embedding_function = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/multi-qa-mpnet-base-dot-v1"
+        # Embedding function using Ollama (snowflake-arctic-embed-m)
+        ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+        self.embedding_function = OllamaEmbeddings(
+            model="snowflake-arctic-embed-m",
+            base_url=ollama_url
         )
 
         self.n_results = int(os.getenv("N_RESULTS", "5"))

@@ -7,7 +7,7 @@ from components.healthcheck_sidebar import Healthcheck_Sidebar
 from services.chromadb_service import chromadb_service
 from config.settings import config
 import pandas as pd
-from sentence_transformers import SentenceTransformer
+from langchain_ollama import OllamaEmbeddings
 import time
 import re
 
@@ -25,7 +25,11 @@ if "collections" not in st.session_state:
 # Initialize embedding model for queries
 @st.cache_resource
 def load_embedding_model():
-    return SentenceTransformer('multi-qa-mpnet-base-dot-v1')
+    ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+    return OllamaEmbeddings(
+        model="snowflake-arctic-embed-m",
+        base_url=ollama_url
+    )
 
 
 # SIDEBAR - SYSTEM STATUS & CONTROLS
