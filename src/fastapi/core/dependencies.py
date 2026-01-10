@@ -325,3 +325,25 @@ def get_agent_service_legacy():
     return AgentService()
 
 
+def get_document_service():
+    """
+    Get DocumentService instance for document generation.
+
+    Returns:
+        DocumentService: Document generation service
+
+    Example:
+        @router.post("/generate-document")
+        def generate_document(
+            doc_service: DocumentService = Depends(get_document_service)
+        ):
+            return doc_service.generate(...)
+    """
+    from services.generate_docs_service import DocumentService
+    return DocumentService()
+
+
+# Alias for backward compatibility
+document_service_dep = get_document_service
+
+

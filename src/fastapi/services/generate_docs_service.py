@@ -558,6 +558,7 @@ class DocumentService:
         sectioning_strategy: Optional[str] = None,
         chunks_per_section: Optional[int] = None,
         pipeline_id: str = None,
+        model_profile: Optional[str] = None,
     ) -> List[dict]:
         """
         Generate test plan using multi-agent architecture:
@@ -592,7 +593,8 @@ class DocumentService:
                 agent_set_id=agent_set_id,
                 pipeline_id=pipeline_id,
                 sectioning_strategy=sectioning_strategy,
-                chunks_per_section=chunks_per_section
+                chunks_per_section=chunks_per_section,
+                model_profile=model_profile
             )
             
             if not test_plan_result:

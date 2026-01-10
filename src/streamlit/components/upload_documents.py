@@ -3,8 +3,7 @@ import requests
 import time
 import re
 import pandas as pd
-from sentence_transformers import SentenceTransformer
-from config.constants import EMBEDDING_MODEL_NAME
+from config.constants import EMBEDDING_MODEL_NAME, OLLAMA_URL
 from config.settings import config
 from services.chromadb_service import chromadb_service
 from app_lib.utils import render_reconstructed_document
@@ -12,9 +11,10 @@ from components.job_status_monitor import JobStatusMonitor
 
 
 @st.cache_resource(show_spinner=False)
-def get_embedding_model() -> SentenceTransformer:
+def get_embedding_model():
     """Cache the embedding model to avoid reloading on every query."""
-    return SentenceTransformer(EMBEDDING_MODEL_NAME)
+    from langchain_ollama import OllamaEmbeddings
+    return OllamaEmbeddings(model=EMBEDDING_MODEL_NAME, base_url=OLLAMA_URL)
 
 def browse_documents(key_prefix: str = "",):
     """

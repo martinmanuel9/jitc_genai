@@ -34,6 +34,7 @@ from services.llm_invoker import LLMInvoker
 
 from services.llm_service import LLMService
 from config.agent_registry import get_agent_registry
+from config.model_profiles import get_model_profile, ModelProfile
 from repositories.agent_set_repository import AgentSetRepository
 from repositories.test_plan_agent_repository import TestPlanAgentRepository
 from core.database import get_db
@@ -435,7 +436,8 @@ class MultiAgentTestPlanService:
                                      agent_set_id: int = None,
                                      pipeline_id: str = None,
                                      sectioning_strategy: Optional[str] = None,
-                                     chunks_per_section: Optional[int] = None) -> FinalTestPlan:
+                                     chunks_per_section: Optional[int] = None,
+                                     model_profile: Optional[str] = None) -> FinalTestPlan:
         """
         Main entry point for multi-agent test plan generation
 
@@ -451,6 +453,11 @@ class MultiAgentTestPlanService:
         logger.info("=== STARTING MULTI-AGENT TEST PLAN GENERATION ===")
         logger.info(f"Parameters: collections={source_collections}, doc_ids={source_doc_ids}, title={doc_title}")
         start_time = time.time()
+
+        # Load model profile for configuration
+        self._current_profile = get_model_profile(model_profile)
+        logger.info(f"Using model profile: {self._current_profile.display_name} (model: {self._current_profile.model_name})")
+        logger.info(f"Profile settings: actor_timeout={self._current_profile.actor_timeout}s, critic_timeout={self._current_profile.critic_timeout}s, chunks_per_section={self._current_profile.chunks_per_section}")
 
         # Validate agent_set_id is provided
         if agent_set_id is None:
@@ -1008,9 +1015,13 @@ class MultiAgentTestPlanService:
             logger.info(f"Deploying agents for {len(sections)} sections using default orchestration")
         
         section_results = []
-        
+
+        # Use max_workers from profile (CPU-friendly settings)
+        max_workers = getattr(self._current_profile, 'max_workers', 4)
+        logger.info(f"Using {max_workers} concurrent workers (from profile: {self._current_profile.display_name})")
+
         # Process each section with multiple actor agents + critic
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_section = {}
             
             for idx, (section_title, section_content) in enumerate(sections.items()):

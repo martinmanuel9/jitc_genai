@@ -141,7 +141,36 @@ def Document_Generator(allow_stop: bool = True):
                         st.caption(f"     {stage.get('description')}")
     else:
         st.error("No agent sets available. Please create an agent set in the Agent Set Manager.")
-        st.stop()
+        if allow_stop:
+            st.stop()
+        return
+
+    # ----------------------------
+    # Model Profile Selection
+    # ----------------------------
+    st.markdown("---")
+    st.subheader("Processing Mode")
+
+    model_profile = st.radio(
+        "Select processing mode (optimized for CPU):",
+        options=["fast", "balanced", "quality"],
+        format_func=lambda x: {
+            "fast": "Fast (CPU) - llama3.2:1b (1.2B)",
+            "balanced": "Balanced - llama3.2:3b (3.2B)",
+            "quality": "Quality - phi3:mini (3.8B)"
+        }.get(x, x),
+        key="gen_model_profile",
+        horizontal=True,
+        help="All profiles optimized for CPU-only environments. Fast uses the smallest model for quickest results."
+    )
+
+    # Show profile details
+    profile_descriptions = {
+        "fast": "Uses **llama3.2:1b** (1.2B params). Fastest on CPU. 2 concurrent workers, chunks of 15.",
+        "balanced": "Uses **llama3.2:3b** (3.2B params). Better quality, moderate speed. 2 workers, chunks of 10.",
+        "quality": "Uses **phi3:mini** (3.8B params). Best quality on CPU. 1 worker, chunks of 5 for thorough analysis."
+    }
+    st.caption(profile_descriptions.get(model_profile, ""))
 
     # ----------------------------
     # 2) Select source documents
@@ -150,13 +179,19 @@ def Document_Generator(allow_stop: bool = True):
     st.subheader("Source Documents")
 
     if "collections" not in st.session_state:
-        st.session_state.collections = chromadb_service.get_collections()
+        try:
+            st.session_state.collections = chromadb_service.get_collections()
+        except Exception:
+            st.session_state.collections = []
+            st.warning("Could not load folders. Check the vector DB connection.")
 
     collections = st.session_state.collections
 
     if not collections:
         st.warning("No folders available. Please upload documents first.")
-        st.stop()
+        if allow_stop:
+            st.stop()
+        return
 
     # Pick collection & load source docs
     source_collection = st.selectbox(
@@ -314,14 +349,16 @@ def Document_Generator(allow_stop: bool = True):
                 "doc_title": out_name,
                 "export_format": "pandoc",  # Always use Pandoc for professional formatting
                 "include_toc": include_toc,
-                "number_sections": number_sections
+                "number_sections": number_sections,
+                "model_profile": model_profile  # Speed vs quality tradeoff
             }
 
             # Add agent_set_id
             agent_set = next((s for s in active_agent_sets if s['name'] == selected_agent_set), None)
             if agent_set:
                 payload["agent_set_id"] = agent_set['id']
-                st.info(f"Using agent set: **{selected_agent_set}**")
+                profile_display = {"fast": "Fast (Draft)", "balanced": "Balanced", "quality": "Quality (Production)"}.get(model_profile, model_profile)
+                st.info(f"Using agent set: **{selected_agent_set}** with **{profile_display}** processing mode")
 
             try:
                 # Call async endpoint

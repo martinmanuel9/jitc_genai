@@ -23,6 +23,7 @@ from core.dependencies import document_service_dep
 from repositories.agent_set_repository import AgentSetRepository
 from sqlalchemy.orm import Session
 from core.database import get_db
+from config.model_profiles import get_model_profile, get_all_profiles, get_profile_choices, estimate_processing_time
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +41,9 @@ class GenerateJSONTestPlanRequest(BaseModel):
     source_doc_ids: Optional[List[str]] = None
     doc_title: Optional[str] = "Comprehensive Test Plan"
     agent_set_id: int
-    sectioning_strategy: Optional[str] = "auto"
-    chunks_per_section: Optional[int] = 5
+    sectioning_strategy: Optional[str] = None  # Will be set by profile if not specified
+    chunks_per_section: Optional[int] = None  # Will be set by profile if not specified
+    model_profile: Optional[str] = "fast"  # fast, balanced, or quality
 
 
 class JSONTestPlanResponse(BaseModel):
@@ -99,6 +101,42 @@ class ValidateJSONTestPlanResponse(BaseModel):
 # Endpoints
 # ============================================================================
 
+@json_test_plan_router.get("/profiles")
+async def get_available_profiles():
+    """
+    Get available model profiles for test plan generation.
+
+    Returns profiles with their settings and recommendations.
+    """
+    profiles = get_profile_choices()
+    return {
+        "profiles": profiles,
+        "default": "fast",
+        "description": "Model profiles control the trade-off between speed and quality"
+    }
+
+
+@json_test_plan_router.post("/estimate-time")
+async def estimate_generation_time(
+    num_sections: int,
+    num_actors: int = 3,
+    model_profile: str = "fast"
+):
+    """
+    Estimate processing time for a generation job.
+
+    Args:
+        num_sections: Number of document sections
+        num_actors: Number of actor agents (typically 2-4)
+        model_profile: Model profile to use (fast, balanced, quality)
+
+    Returns:
+        Time estimates and recommendations
+    """
+    estimate = estimate_processing_time(num_sections, num_actors, model_profile)
+    return estimate
+
+
 @json_test_plan_router.post("/generate", response_model=JSONTestPlanResponse)
 async def generate_json_test_plan(
     req: GenerateJSONTestPlanRequest,
@@ -120,24 +158,30 @@ async def generate_json_test_plan(
         JSON test plan structure
     """
     try:
-        logger.info(f"Generating JSON test plan: {req.doc_title}")
-        
+        # Get model profile settings
+        profile = get_model_profile(req.model_profile)
+        logger.info(f"Generating JSON test plan: {req.doc_title} with profile '{profile.display_name}' (model: {profile.model_name})")
+
+        # Use profile settings if not explicitly specified
+        sectioning_strategy = req.sectioning_strategy or profile.sectioning_strategy
+        chunks_per_section = req.chunks_per_section or profile.chunks_per_section
+
         # Validate agent set
         agent_set_repo = AgentSetRepository()
         agent_set = agent_set_repo.get_by_id(req.agent_set_id, db)
-        
+
         if not agent_set:
             raise HTTPException(
                 status_code=404,
                 detail=f"Agent set {req.agent_set_id} not found"
             )
-        
+
         if not agent_set.is_active:
             raise HTTPException(
                 status_code=400,
                 detail=f"Agent set {agent_set.name} is inactive"
             )
-        
+
         # Generate markdown-based test plan first
         pipeline_id = f"pipeline_{uuid.uuid4().hex[:12]}"
         docs = doc_service.generate_test_plan(
@@ -145,9 +189,10 @@ async def generate_json_test_plan(
             source_doc_ids=req.source_doc_ids or [],
             doc_title=req.doc_title,
             agent_set_id=req.agent_set_id,
-            sectioning_strategy=req.sectioning_strategy,
-            chunks_per_section=req.chunks_per_section,
-            pipeline_id=pipeline_id
+            sectioning_strategy=sectioning_strategy,
+            chunks_per_section=chunks_per_section,
+            pipeline_id=pipeline_id,
+            model_profile=req.model_profile  # Pass profile to service
         )
         
         if not docs or len(docs) == 0:

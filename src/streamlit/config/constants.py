@@ -7,6 +7,7 @@ consistency between Streamlit and FastAPI services.
 """
 from typing import Dict
 import sys
+import os
 from pathlib import Path
 
 # Add parent directory to path to import shared module
@@ -23,7 +24,8 @@ from llm_config.llm_config import (
 )
 
 # Embedding Model Configuration
-EMBEDDING_MODEL_NAME = "multi-qa-mpnet-base-dot-v1"
+EMBEDDING_MODEL_NAME = "snowflake-arctic-embed-m"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
 # Document Processing Defaults
 DEFAULT_CHUNK_SIZE = 1000

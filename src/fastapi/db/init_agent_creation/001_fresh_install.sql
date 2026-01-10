@@ -97,12 +97,12 @@ INSERT INTO compliance_agents (
     agent_metadata, created_at, updated_at
 ) VALUES
 -- Diverse Actor Agents (matching mil_test_plan_gen.ipynb)
--- Actor Agent 1: GPT-OSS (A)
+-- Actor Agent 1: Llama 3.2 (A)
 (
-    'Actor Agent - GPT-OSS (A)',
+    'Actor Agent - Llama 3.2 (A)',
     'actor',
     'test_plan_generation',
-    'gpt-oss:latest',
+    'llama3.2:3b',
     'You are a compliance and test planning expert specializing in military and technical standards.
 
 Your role is to meticulously analyze technical specifications and extract testable requirements with exceptional detail and precision.',
@@ -168,18 +168,18 @@ IMPORTANT:
     TRUE,
     TRUE,
     'system',
-    'Local GPT-OSS actor for requirement extraction (A)',
-    '{"model_variant": "gpt-oss:latest", "purpose": "fast_analysis"}',
+    'Local Llama 3.2 actor for requirement extraction (A)',
+    '{"model_variant": "llama3.2:3b", "purpose": "fast_analysis"}',
     CURRENT_TIMESTAMP,
     CURRENT_TIMESTAMP
 ),
 
--- Actor Agent 2: GPT-OSS (B)
+-- Actor Agent 2: Llama 3.2 (B)
 (
-    'Actor Agent - GPT-OSS (B)',
+    'Actor Agent - Llama 3.2 (B)',
     'actor',
     'test_plan_generation',
-    'gpt-oss:latest',
+    'llama3.2:3b',
     'You are a compliance and test planning expert specializing in military and technical standards.
 
 Your role is to meticulously analyze technical specifications and extract testable requirements with exceptional detail and precision.',
@@ -245,18 +245,18 @@ IMPORTANT:
     TRUE,
     TRUE,
     'system',
-    'Balanced local GPT-OSS actor for requirement extraction (B)',
-    '{"model_variant": "gpt-oss:latest", "purpose": "balanced_analysis"}',
+    'Balanced local Llama 3.2 actor for requirement extraction (B)',
+    '{"model_variant": "llama3.2:3b", "purpose": "balanced_analysis"}',
     CURRENT_TIMESTAMP,
     CURRENT_TIMESTAMP
 ),
 
--- Actor Agent 3: GPT-OSS (C)
+-- Actor Agent 3: Llama 3.2 (C)
 (
-    'Actor Agent - GPT-OSS (C)',
+    'Actor Agent - Llama 3.2 (C)',
     'actor',
     'test_plan_generation',
-    'gpt-oss:latest',
+    'llama3.2:3b',
     'You are a compliance and test planning expert specializing in military and technical standards.
 
 Your role is to meticulously analyze technical specifications and extract testable requirements with exceptional detail and precision.',
@@ -322,8 +322,8 @@ IMPORTANT:
     TRUE,
     TRUE,
     'system',
-    'High-quality thorough GPT-OSS actor for requirement extraction (C)',
-    '{"model_variant": "gpt-oss:latest", "purpose": "thorough_analysis"}',
+    'High-quality thorough Llama 3.2 actor for requirement extraction (C)',
+    '{"model_variant": "llama3.2:3b", "purpose": "thorough_analysis"}',
     CURRENT_TIMESTAMP,
     CURRENT_TIMESTAMP
 ),
@@ -333,7 +333,7 @@ IMPORTANT:
     'Actor Agent (Default)',
     'actor',
     'test_plan_generation',
-    'gpt-oss:latest',
+    'llama3.2:3b',
     'You are a compliance and test planning expert specializing in military and technical standards.
 
 Your role is to meticulously analyze technical specifications and extract testable requirements with exceptional detail and precision.',
@@ -410,7 +410,7 @@ IMPORTANT:
     'Critic Agent (Default)',
     'critic',
     'test_plan_generation',
-    'gpt-oss:latest',
+    'llama3.2:3b',
     'You are a senior test planning reviewer with expertise in synthesizing multiple perspectives into cohesive test plans.
 
 Your role is to critically analyze multiple requirement extractions and create a single, authoritative test plan that:
@@ -498,7 +498,7 @@ TASK: Synthesize these actor outputs into ONE authoritative test plan. Preserve 
     'Contradiction Detection Agent (Default)',
     'contradiction',
     'test_plan_generation',
-    'gpt-oss:latest',
+    'llama3.2:3b',
     'You are a Contradiction Detection Agent specialized in identifying conflicts and inconsistencies in test procedures.
 
 Your role is to detect:
@@ -543,7 +543,7 @@ IDENTIFY AND REPORT:
     'Gap Analysis Agent (Default)',
     'gap_analysis',
     'test_plan_generation',
-    'gpt-oss:latest',
+    'llama3.2:3b',
     'You are a Gap Analysis Agent specialized in identifying missing requirements and test coverage gaps.
 
 Your role is to ensure:
@@ -594,7 +594,7 @@ INSERT INTO compliance_agents (
     'Compliance Checker (Document Analysis)',
     'compliance',
     'document_analysis',
-    'gpt-oss:latest',
+    'llama3.2:3b',
     'You are a compliance verification expert specializing in analyzing technical documents, standards, and requirements.
 
 Your role is to carefully evaluate whether the provided content meets specified requirements, identify compliance issues, and provide detailed analysis.',
@@ -641,7 +641,7 @@ Provide a thorough evaluation of the content, including:
     'Requirements Extractor (Document Analysis)',
     'custom',
     'document_analysis',
-    'gpt-oss:latest',
+    'llama3.2:3b',
     'You are an expert at extracting and analyzing requirements from technical documents, specifications, and standards.
 
 Your role is to identify explicit and implicit requirements, categorize them, and present them in a structured format.',
@@ -695,7 +695,7 @@ Provide your analysis in the following format:
     'Technical Reviewer (Document Analysis)',
     'custom',
     'document_analysis',
-    'gpt-oss:latest',
+    'llama3.2:3b',
     'You are a senior technical reviewer with expertise in evaluating technical documentation, code, architectures, and engineering designs.
 
 Your role is to provide thorough, constructive technical reviews focusing on correctness, completeness, quality, and best practices.',
@@ -751,7 +751,7 @@ Provide a 2-3 sentence overview of the content and your assessment.
     'General Document Analyzer (Document Analysis)',
     'custom',
     'document_analysis',
-    'gpt-oss:latest',
+    'llama3.2:3b',
     'You are a versatile document analysis expert capable of analyzing any type of technical or business content.
 
 Your role is to provide clear, structured analysis that helps users understand and work with the provided content.',
@@ -812,7 +812,7 @@ INSERT INTO agent_sets (
 -- Standard Test Plan Pipeline (Original Notebook Configuration)
 (
     'Standard Test Plan Pipeline',
-    '3 GPT-OSS actors + critic. Fast and proven approach from mil_test_plan_gen.ipynb.',
+    '3 Llama 3.2 actors + critic. Fast and proven approach from mil_test_plan_gen.ipynb.',
     'sequence',
     '{
       "stages": [
@@ -820,7 +820,7 @@ INSERT INTO agent_sets (
           "stage_name": "actor",
           "agent_ids": [1, 2, 3],
           "execution_mode": "parallel",
-          "description": "Three GPT-OSS actors analyze sections in parallel for varied perspectives"
+          "description": "Three Llama 3.2 actors analyze sections in parallel for varied perspectives"
         },
         {
           "stage_name": "critic",

@@ -9,24 +9,27 @@ import json
 from config.settings import config
 from app_lib.api.client import api_client
 
+# Import the new JSON editor
+from components.json_test_plan_editor import render_json_test_plan_editor, render_json_section_viewer
+
 
 def JSON_Test_Plan_Generator():
     """Generate test plans in JSON format for better structure and test card generation"""
     st.header("JSON Test Plan Generator")
-    
+
     st.info("""
-    ✨ **New Feature**: Generate test plans as structured JSON documents.
-    
-    Benefits:
-    - Each section is a separate JSON object
-    - Easier test card generation
-    - Better data structure for processing
-    - Support for programmatic manipulation
+    **Workflow**: Generate test plans as structured JSON documents, then edit sections using the form-based editor.
+
+    1. **Generate** - Create a new test plan from your documents
+    2. **Edit Sections** - Use the form editor to modify sections and test procedures
+    3. **Extract Test Cards** - Convert sections to individual test cards
+    4. **Export** - Download as JSON or Markdown
     """)
-    
-    # Tabs for different workflows
-    tab1, tab2, tab3, tab4 = st.tabs([
+
+    # Tabs for different workflows - added Edit Sections tab
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Generate JSON Plan",
+        "Edit Sections",
         "Extract Test Cards",
         "Manage JSON",
         "Export to Markdown"
@@ -74,21 +77,41 @@ def JSON_Test_Plan_Generator():
                 )
             
             with col2:
-                # Sectioning strategy
-                sectioning_strategy = st.selectbox(
-                    "Sectioning Strategy",
-                    options=["auto", "by_metadata", "by_chunks"],
-                    key="json_strategy"
+                # Model profile selection (Speed vs Quality)
+                model_profile = st.radio(
+                    "Processing Mode",
+                    options=["fast", "balanced", "quality"],
+                    format_func=lambda x: {
+                        "fast": "Fast (Draft) - llama3.2:3b ~10-30s/section",
+                        "balanced": "Balanced - phi3:mini ~30-60s/section",
+                        "quality": "Quality (Production) - gpt-oss:latest ~2-5min/section"
+                    }.get(x, x),
+                    index=0,
+                    key="json_model_profile",
+                    help="Fast: Quick drafts. Balanced: Good quality, moderate speed. Quality: Best results, slower."
                 )
-                
-                # Chunks per section
-                chunks_per_section = st.number_input(
-                    "Chunks per Section",
-                    min_value=1,
-                    max_value=20,
-                    value=5,
-                    key="json_chunks"
-                )
+
+                # Show profile-based chunk settings
+                profile_chunks = {"fast": 10, "balanced": 5, "quality": 3}
+                default_chunks = profile_chunks.get(model_profile, 5)
+
+                # Advanced options expander
+                with st.expander("Advanced Options"):
+                    sectioning_strategy = st.selectbox(
+                        "Sectioning Strategy",
+                        options=["by_chunks", "auto", "by_metadata"],
+                        key="json_strategy",
+                        help="by_chunks: Group document chunks. auto: Auto-detect sections. by_metadata: Use document metadata."
+                    )
+
+                    chunks_per_section = st.number_input(
+                        "Chunks per Section",
+                        min_value=1,
+                        max_value=20,
+                        value=default_chunks,
+                        key="json_chunks",
+                        help=f"Recommended for {model_profile} profile: {default_chunks}"
+                    )
             
             # Source documents
             st.markdown("### Source Documents")
@@ -150,7 +173,11 @@ def JSON_Test_Plan_Generator():
                 elif not agent_set:
                     st.error("Please select an agent set")
                 else:
-                    with st.spinner("Generating JSON test plan..."):
+                    # Calculate timeout based on profile
+                    profile_timeouts = {"fast": 600, "balanced": 1200, "quality": 3600}
+                    timeout_seconds = profile_timeouts.get(model_profile, 600)
+
+                    with st.spinner(f"Generating JSON test plan using {model_profile} mode... (timeout: {timeout_seconds//60} min)"):
                         try:
                             payload = {
                                 "source_collections": [source_collection],
@@ -158,13 +185,14 @@ def JSON_Test_Plan_Generator():
                                 "doc_title": doc_title,
                                 "agent_set_id": agent_set['id'],
                                 "sectioning_strategy": sectioning_strategy,
-                                "chunks_per_section": chunks_per_section
+                                "chunks_per_section": chunks_per_section,
+                                "model_profile": model_profile
                             }
-                            
+
                             response = api_client.post(
                                 f"{config.fastapi_url}/api/json-test-plans/generate",
                                 data=payload,
-                                timeout=600  # 10 minute timeout
+                                timeout=timeout_seconds
                             )
                             
                             if response.get("success"):
@@ -206,9 +234,15 @@ def JSON_Test_Plan_Generator():
                             st.error(f"Failed to generate test plan: {e}")
     
     # ============================================================================
-    # TAB 2: Extract Test Cards
+    # TAB 2: Edit Sections (Form-Based Editor)
     # ============================================================================
     with tab2:
+        render_json_test_plan_editor()
+
+    # ============================================================================
+    # TAB 3: Extract Test Cards
+    # ============================================================================
+    with tab3:
         st.subheader("Extract Test Cards from JSON Plan")
         
         if "json_test_plan" not in st.session_state:
@@ -260,9 +294,9 @@ def JSON_Test_Plan_Generator():
                             st.error(f"Failed to extract test cards: {e}")
     
     # ============================================================================
-    # TAB 3: Manage JSON
+    # TAB 4: Manage JSON
     # ============================================================================
-    with tab3:
+    with tab4:
         st.subheader("Manage JSON Test Plan")
         
         if "json_test_plan" not in st.session_state:
@@ -326,9 +360,9 @@ def JSON_Test_Plan_Generator():
                 st.json(test_plan)
     
     # ============================================================================
-    # TAB 4: Export to Markdown
+    # TAB 5: Export to Markdown
     # ============================================================================
-    with tab4:
+    with tab5:
         st.subheader("Export to Markdown")
         
         if "json_test_plan" not in st.session_state:

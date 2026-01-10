@@ -25,21 +25,82 @@ CHROMADB_API = config.endpoints.vectordb
 def fetch_collections():
     return chromadb_service.get_collections()
 
-def Direct_Chat():
-    if "collections" not in st.session_state:
-        st.session_state.collections = fetch_collections()
+@st.cache_data(show_spinner=False)
+def fetch_model_options():
+    if model_key_map:
+        return model_key_map, model_descriptions
 
-    collections = st.session_state.collections
+    try:
+        response = api_client.get(
+            f"{config.fastapi_url}/api/models",
+            timeout=10,
+            show_errors=False
+        )
+    except Exception:
+        return {}, {}
+
+    if isinstance(response, list):
+        key_map = {}
+        descriptions = {}
+        for model in response:
+            display_name = model.get("display_name")
+            model_id = model.get("model_id")
+            if not display_name or not model_id:
+                continue
+            key_map[display_name] = model_id
+            description = model.get("description")
+            if description:
+                descriptions[model_id] = description
+        return key_map, descriptions
+
+    return {}, {}
+
+def Direct_Chat():
+    collections_error = False
+    if "collections" not in st.session_state:
+        try:
+            st.session_state.collections = fetch_collections()
+        except Exception:
+            st.session_state.collections = []
+            collections_error = True
+
+    # Initialize chat history for the current session
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+
+    collections = st.session_state.collections or []
+    model_map, model_descs = fetch_model_options()
     chat_tab, pipeline_tab, doc_upload_tab, history_tab = st.tabs([
         "Chat with AI", "Agent Pipeline", "Upload Documents", "Chat History"
     ])
 
     with chat_tab:
+        if collections_error:
+            st.warning("Could not load document folders. RAG options may be limited until the vector DB is reachable.")
+
         col1, col2 = st.columns([2, 1])
         with col1:
-            mode = st.selectbox("Select AI Model:", list(model_key_map.keys()), key="chat_model")
-            if model_key_map[mode] in model_descriptions:
-                st.info(model_descriptions[model_key_map[mode]])
+            mode = None
+            model_id = None
+            if model_map:
+                mode = st.selectbox("Select AI Model:", list(model_map.keys()), key="chat_model")
+                model_id = model_map.get(mode)
+                if model_id and model_id in model_descs:
+                    st.info(model_descs[model_id])
+            else:
+                st.error("No LLMs are available. Check llm_config or /api/models.")
+
+        # Display chat message history
+        chat_container = st.container()
+        
+        with chat_container:
+            for message in st.session_state.chat_messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+                    citations = message.get("citations")
+                    if citations:
+                        display_citations(citations)
+        
 
         use_rag = st.checkbox("Use RAG (Retrieval Augmented Generation)", key="chat_use_rag")
         collection_name = None
@@ -91,71 +152,88 @@ def Direct_Chat():
             else:
                 st.warning("No folders available. Upload docs first.")
 
-        user_input = st.text_area(
-            "Ask your question:", height=100,
-            placeholder="e.g. Summarize the latest uploaded document"
+        user_input = st.chat_input(
+            "Ask your question (press Enter to send)"
         )
 
-        if st.button("Get Analysis", type="primary", key="chat_button"):
-            if not user_input:
+        if user_input:
+            if not user_input.strip():
                 st.warning("Please enter a question.")
-            elif use_rag and not collection_name:
+                return
+            if not model_id:
+                st.error("Please select an AI model.")
+                return
+            if use_rag and not collection_name:
                 st.error("Please select a folder for RAG mode.")
-            else:
-                with st.spinner(f"{mode} is analyzing..."):
-                    try:
-                        # If document_id is set, use document evaluation endpoint
-                        # Otherwise use regular chat endpoint
-                        if document_id:
-                            # Document-specific evaluation
-                            data = chat_service.evaluate_document(
-                                document_id=document_id,
-                                collection_name=collection_name,
-                                prompt=user_input,
-                                model_name=model_key_map[mode],
-                                top_k=5
-                            )
-                            answer = data.get("response", "")
-                            rt_ms = data.get("response_time_ms", 0)
-                            session_id = data.get("session_id", "N/A")
-                            formatted_citations = data.get("formatted_citations", "")
+                return
 
+            # Add user message to chat history
+            st.session_state.chat_messages.append({
+                "role": "user",
+                "content": user_input
+            })
+
+            model_label = mode or "Selected model"
+            with st.spinner(f"{model_label} is analyzing..."):
+                try:
+                    # If document_id is set, use document evaluation endpoint
+                    # Otherwise use regular chat endpoint
+                    if document_id:
+                        # Document-specific evaluation
+                        data = chat_service.evaluate_document(
+                            document_id=document_id,
+                            collection_name=collection_name,
+                            prompt=user_input,
+                            model_name=model_id,
+                            top_k=5
+                        )
+                        answer = data.get("response", "")
+                        rt_ms = data.get("response_time_ms", 0)
+                        session_id = data.get("session_id", "N/A")
+                        formatted_citations = data.get("formatted_citations", "")
+
+                        if answer and len(answer.strip()) > 0:
+                            # Add assistant message to chat history
+                            full_response = f"{answer}\n\n_Response time: {rt_ms/1000:.2f}s | Session ID: {session_id}_"
+                            st.session_state.chat_messages.append({
+                                "role": "assistant",
+                                "content": full_response,
+                                "citations": formatted_citations
+                            })
                             st.success("Analysis Complete (Document-Specific)")
-
-                            # Debug information
-                            st.info(f"Response length: {len(answer) if answer else 0} characters")
-
-                            if answer and len(answer.strip()) > 0:
-                                st.markdown("### Analysis Results")
-                                st.markdown(answer)
-                            else:
-                                st.warning("No response generated or response is empty.")
-                                st.write("**Full response data:**")
-                                st.json(data)
-
-                            st.caption(f"Response time: {rt_ms/1000:.2f}s")
-                            st.caption(f"Session ID: {session_id}")
-                            display_citations(formatted_citations)
                         else:
-                            # Regular chat (with optional RAG across entire collection)
-                            response = chat_service.send_message(
-                                query=user_input,
-                                model=model_key_map[mode],
-                                use_rag=use_rag,
-                                collection_name=collection_name
-                            )
-                            st.success("Analysis Complete:")
-                            st.markdown(response.response)
-                            if response.response_time_ms:
-                                st.caption(f"Response time: {response.response_time_ms/1000:.2f}s")
-                            if hasattr(response, 'session_id') and response.session_id:
-                                st.caption(f"Session ID: {response.session_id}")
+                            st.warning("No response generated or response is empty.")
+                            st.write("**Full response data:**")
+                            st.json(data)
+                    else:
+                        # Regular chat (with optional RAG across entire collection)
+                        response = chat_service.send_message(
+                            query=user_input,
+                            model=model_id,
+                            use_rag=use_rag,
+                            collection_name=collection_name
+                        )
 
-                            # Display citations if available (RAG mode)
+                        if response.response:
+                            # Add assistant message to chat history
+                            response_time_str = f"{response.response_time_ms/1000:.2f}s" if response.response_time_ms else "N/A"
+                            session_id_str = response.session_id if hasattr(response, 'session_id') and response.session_id else "N/A"
+
                             formatted_citations = getattr(response, 'formatted_citations', '') or ''
-                            display_citations(formatted_citations)
-                    except Exception as e:
-                        st.error(f"Request failed: {e}")
+                            full_response = f"{response.response}\n\n_Response time: {response_time_str} | Session ID: {session_id_str}_"
+
+                            st.session_state.chat_messages.append({
+                                "role": "assistant",
+                                "content": full_response,
+                                "citations": formatted_citations
+                            })
+                            st.success("Analysis Complete")
+                        else:
+                            st.error("No response received from the model")
+                except Exception as e:
+                    st.error(f"Request failed: {e}")
+
+            st.rerun()
 
     with pipeline_tab:
         _render_agent_pipeline_tab(collections)

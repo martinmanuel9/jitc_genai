@@ -59,6 +59,7 @@ class GenerateRequest(BaseModel):
     sectioning_strategy:  Optional[str]         = "auto"   # auto | by_chunks | by_metadata | by_pages
     chunks_per_section:   Optional[int]         = 5
     agent_set_id:         int                   = None  # Required agent set for orchestration
+    model_profile:        Optional[str]         = "fast"  # fast | balanced | quality - controls speed vs quality tradeoff
 
 @doc_gen_api_router.post("/generate_documents")
 async def generate_documents(
@@ -185,7 +186,8 @@ def _run_generation_background(
     sectioning_strategy: Optional[str],
     chunks_per_section: Optional[int],
     doc_service: DocumentService,
-    pipeline_id: str
+    pipeline_id: str,
+    model_profile: Optional[str] = "fast"
 ):
     """
     Background task for document generation.
@@ -206,7 +208,8 @@ def _run_generation_background(
             agent_set_id,
             sectioning_strategy,
             chunks_per_section,
-            pipeline_id
+            pipeline_id,
+            model_profile
         )
         
         logger.info(f"Test plan generation completed, returned {len(docs) if docs else 0} documents")
@@ -341,6 +344,7 @@ async def generate_documents_async(
         "pipeline_id": pipeline_id,
         "doc_title": req.doc_title or "Test Plan",
         "agent_set_name": agent_set.name,
+        "model_profile": req.model_profile or "fast",
         "status": "queued",
         "created_at": now,
         "last_updated_at": now,
@@ -359,7 +363,8 @@ async def generate_documents_async(
         req.sectioning_strategy,
         req.chunks_per_section,
         doc_service,
-        pipeline_id  # Pass to service so it doesn't create another one
+        pipeline_id,  # Pass to service so it doesn't create another one
+        req.model_profile  # Pass model profile for speed vs quality tradeoff
     )
 
     logger.info(f"Background task queued: {pipeline_id}")
