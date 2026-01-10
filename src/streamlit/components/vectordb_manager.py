@@ -13,7 +13,7 @@ def render_vectordb_manager(key_prefix: str = "vectordb"):
     Comprehensive vector database file management component.
 
     Provides full CRUD operations for:
-    - Collections (create, delete)
+    - Folders (create, delete)
     - Documents (reconstruct, delete multiple)
     - Bulk operations
 
@@ -22,11 +22,11 @@ def render_vectordb_manager(key_prefix: str = "vectordb"):
     """
         # Main tabs
     tab_collections, tab_documents = st.tabs([
-        "Collections",
+        "Folders",
         "Documents"
     ])
 
-    # Tab 1: Collection Management
+    # Tab 1: Folder Management
     with tab_collections:
         render_collection_management(key_prefix)
 
@@ -36,8 +36,8 @@ def render_vectordb_manager(key_prefix: str = "vectordb"):
 
 
 def render_collection_management(key_prefix: str):
-    """Manage collections: create, delete"""
-    st.subheader("Collection Management")
+    """Manage folders: create, delete"""
+    st.subheader("Folder Management")
 
     # Header with Refresh and Create buttons
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -50,11 +50,11 @@ def render_collection_management(key_prefix: str):
             st.session_state[f"{key_prefix}_show_create_form"] = True
             st.rerun()
 
-    # Create collection form (popup style)
+    # Create folder form (popup style)
     if st.session_state.get(f"{key_prefix}_show_create_form", False):
-        with st.expander("Create New Collection", expanded=True):
+        with st.expander("Create New Folder", expanded=True):
             new_collection_name = st.text_input(
-                "Collection Name",
+                "Folder Name",
                 key=f"{key_prefix}_new_collection_name",
                 placeholder="e.g., legal_contracts"
             )
@@ -65,14 +65,14 @@ def render_collection_management(key_prefix: str):
                     if new_collection_name:
                         try:
                             result = chromadb_service.create_collection(new_collection_name)
-                            st.success(f"Collection '{new_collection_name}' created!")
+                            st.success(f"Folder '{new_collection_name}' created!")
                             st.session_state.pop(f"{key_prefix}_collections", None)
                             st.session_state.pop(f"{key_prefix}_show_create_form", None)
                             st.rerun()
                         except Exception as e:
                             st.error(f"Failed to create: {e}")
                     else:
-                        st.warning("Please enter a collection name")
+                        st.warning("Please enter a folder name")
             with col2:
                 if st.button("Cancel", key=f"{key_prefix}_cancel_create", use_container_width=True):
                     st.session_state.pop(f"{key_prefix}_show_create_form", None)
@@ -81,11 +81,11 @@ def render_collection_management(key_prefix: str):
     collections = get_collections_cached(key_prefix)
 
     if not collections:
-        st.info("No collections found. Click 'Create New' to get started.")
+        st.info("No folders found. Click 'Create New' to get started.")
         return
 
-    st.markdown("### Collections")
-    st.success(f"Found {len(collections)} collection(s)")
+    st.markdown("### Folders")
+    st.success(f"Found {len(collections)} folder(s)")
 
     # Display each collection with action buttons
     for collection_name in collections:
@@ -122,7 +122,7 @@ def render_collection_management(key_prefix: str):
         st.markdown("---")
 
         with st.container():
-            st.subheader(f"Collection: {view_collection}")
+            st.subheader(f"Folder: {view_collection}")
 
             # Get detailed stats
             docs = get_documents_in_collection(view_collection, key_prefix)
@@ -142,7 +142,7 @@ def render_collection_management(key_prefix: str):
 
             # Document list
             if doc_groups:
-                st.markdown("#### Documents in Collection")
+                st.markdown("#### Documents in Folder")
                 for doc_name, doc_list in doc_groups.items():
                     st.markdown(f"- **{doc_name}** ({len(doc_list)} sections)")
 
@@ -157,8 +157,8 @@ def render_collection_management(key_prefix: str):
         st.markdown("---")
 
         with st.container():
-            st.error(f"Delete Collection: {delete_collection}")
-            st.warning("This will permanently delete all documents in the collection! This action cannot be undone.")
+            st.error(f"Delete Folder: {delete_collection}")
+            st.warning("This will permanently delete all documents in the folder! This action cannot be undone.")
 
             # Get collection stats
             docs = get_documents_in_collection(delete_collection, key_prefix)
@@ -177,7 +177,7 @@ def render_collection_management(key_prefix: str):
                             f"{VECTORDB_API}/collection",
                             params={"collection_name": delete_collection}
                         )
-                        st.success(f"Deleted collection '{delete_collection}'")
+                        st.success(f"Deleted folder '{delete_collection}'")
                         st.session_state.pop(f"{key_prefix}_collections", None)
                         st.session_state.pop(f"{key_prefix}_docs_{delete_collection}", None)
                         st.session_state.pop(f"{key_prefix}_delete_collection", None)
@@ -197,14 +197,14 @@ def render_document_management(key_prefix: str):
     collections = get_collections_cached(key_prefix)
 
     if not collections:
-        st.info("No collections available. Create a collection first.")
+        st.info("No folders available. Create a folder first.")
         return
 
-    # Collection selector
+    # Folder selector
     col1, col2 = st.columns([3, 1])
     with col1:
         selected_collection = st.selectbox(
-            "Select Collection",
+            "Select Folder",
             collections,
             key=f"{key_prefix}_doc_collection_selector"
         )
@@ -222,14 +222,14 @@ def render_document_management(key_prefix: str):
     docs = get_documents_in_collection(selected_collection, key_prefix)
 
     if not docs or not docs.get('ids'):
-        st.info(f"No documents found in '{selected_collection}'")
+        st.info(f"No documents found in folder '{selected_collection}'")
         return
 
     # Group by document_name and document_id
     doc_groups = group_documents_by_document_id(docs)
 
     if not doc_groups:
-        st.info(f"No documents found in '{selected_collection}'")
+        st.info(f"No documents found in folder '{selected_collection}'")
         return
 
     st.success(f"Found {len(doc_groups)} unique document(s)")
@@ -348,7 +348,7 @@ def render_document_management(key_prefix: str):
             with col1:
                 st.metric("Total Sections", response.get('total_chunks', 0))
             with col2:
-                st.metric("Collection", reconstruct_data['collection'])
+                st.metric("Folder", reconstruct_data['collection'])
             with col3:
                 metadata = response.get('metadata', {})
                 st.metric("Total Images", metadata.get('total_images', 0))
@@ -413,7 +413,7 @@ def get_collections_cached(key_prefix: str) -> List[str]:
         try:
             st.session_state[cache_key] = chromadb_service.get_collections()
         except Exception as e:
-            st.error(f"Failed to load collections: {e}")
+            st.error(f"Failed to load folders: {e}")
             return []
 
     return st.session_state[cache_key]

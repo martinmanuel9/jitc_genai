@@ -12,7 +12,7 @@ CHROMADB_API = config.endpoints.vectordb
 
 def single_agent_analysis(agents, agent_choices, collections):
     st.subheader("Single Agent Analysis")
-    st.info("Analyze content using selected specialized agents with multiple input options: direct text, document upload, or collection documents.")
+    st.info("Analyze content using selected specialized agents with multiple input options: direct text, document upload, or folder documents.")
     
     # Input method selection
     input_method = st.radio(
@@ -40,12 +40,12 @@ def single_agent_analysis(agents, agent_choices, collections):
             use_rag = st.checkbox("Enhance with RAG context", key="direct_rag")
             if use_rag and collections:
                 collection_name = st.selectbox(
-                    "Select Collection for RAG context:", 
+                    "Select Folder for RAG context:", 
                     collections,
                     key="direct_rag_collection"
                 )
             elif use_rag:
-                st.warning("No collections available for RAG enhancement")
+                st.warning("No folders available for RAG enhancement")
     
     # UPLOAD DOCUMENT 
     elif input_method == "Upload Document":
@@ -74,22 +74,22 @@ def single_agent_analysis(agents, agent_choices, collections):
                 key="upload_analysis_prompt"
             )
             
-            # Collection selection for uploaded document
+            # Folder selection for uploaded document
             if collections:
                 collection_name = st.selectbox(
-                    "Select Collection (where document was uploaded):",
+                    "Select Folder (where document was uploaded):",
                     collections,
                     key="upload_collection_select",
-                    help="Choose the collection where you uploaded your document"
+                    help="Choose the folder where you uploaded your document"
                 )
             else:
-                st.warning("No collections available. Upload a document first.")
+                st.warning("No folders available. Upload a document first.")
                 collection_name = None
 
     # USE EXISTING DOCUMENT
     elif input_method == "Use Existing Document":
         with st.container(border=True):
-            st.write("**Use Existing Document from Collections**")
+            st.write("**Use Existing Document from Folders**")
 
             # Browse and select document
             browse_documents(key_prefix="single_browse")
@@ -255,7 +255,7 @@ def single_agent_analysis(agents, agent_choices, collections):
         
         **Direct Text Input:**
         - Paste text directly for immediate analysis
-        - Optional RAG enhancement from your collections
+        - Optional RAG enhancement from your folders
         - Best for: Quick analysis of copied text or short content
         
         **Upload Document:**
@@ -265,7 +265,7 @@ def single_agent_analysis(agents, agent_choices, collections):
         
         **Use Existing Document:**
         - Select from previously uploaded documents
-        - Browse your collections and select specific documents
+        - Browse your folders and select specific documents
         - Best for: Re-analyzing or getting new perspectives on existing documents
         
         **Agent Selection:**

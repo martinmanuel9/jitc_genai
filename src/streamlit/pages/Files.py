@@ -34,7 +34,7 @@ Healthcheck_Sidebar()
 # Streamlit app configuration
 
 st.set_page_config(page_title="Document Management", layout="wide")
-st.title("Document & Collection Management")
+st.title("Document & Folder Management")
 
 
 ### Document Upload and Management
@@ -60,7 +60,7 @@ with st.expander("Query Documents"):
     query_documents(key_prefix="files_query")
 
 # ---- BROWSE DOCUMENTS ----
-with st.expander("Browse Documents in Collection"):
+with st.expander("Browse Documents in Folder"):
     browse_documents(key_prefix="files_browse")
 
 # ---- RECONSTRUCT DOCUMENTS ----

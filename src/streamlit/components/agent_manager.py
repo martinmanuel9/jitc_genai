@@ -1141,7 +1141,7 @@ Test Plan Generation Pipeline:
         st.warning("""
         **IMPORTANT**: RAG context is NOT a placeholder variable you can use!
 
-        RAG context is automatically prepended to your input when you use RAG collections.
+        RAG context is automatically prepended to your input when you use RAG folders.
         You don't need to reference it in your prompts.
         """)
 
@@ -1149,7 +1149,7 @@ Test Plan Generation Pipeline:
         st.code("""
 When RAG is enabled, the system automatically constructs:
 
-## Reference Context (from {collection_name})
+## Reference Context (from folder: {collection_name})
 [Retrieved document 1]
 [Retrieved document 2]
 [Retrieved document 3]

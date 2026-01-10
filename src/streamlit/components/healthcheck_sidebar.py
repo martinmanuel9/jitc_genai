@@ -5,7 +5,7 @@ from services.chromadb_service import chromadb_service
 
 
 def Healthcheck_Sidebar():
-    """Render the sidebar with system health check and collections"""
+    """Render the sidebar with system health check and folders"""
     
     # Initialize session state for health status
     if "health_status" not in st.session_state:
@@ -35,9 +35,9 @@ def Healthcheck_Sidebar():
             with st.expander("System Details"):
                 st.json(st.session_state.health_status)
 
-        st.header("Collections")
+        st.header("Folders")
         
-        if st.button("Load Collections"):
+        if st.button("Load Folders"):
             try:
                 # Load collections using service
                 chromadb_collections = chromadb_service.get_collections()
@@ -45,7 +45,7 @@ def Healthcheck_Sidebar():
                 # Combine and deduplicate
                 all_collections = list(set(chromadb_collections))
                 st.session_state.collections = all_collections
-                st.success("Collections loaded!")
+                st.success("Folders loaded!")
             except Exception as e:
                 st.error(f"Error: {e}")
         
@@ -55,7 +55,7 @@ def Healthcheck_Sidebar():
             for collection in collections:
                 st.text(f"{collection}")
         else:
-            st.info("Click 'Load Collections' to see available databases")
+            st.info("Click 'Load Folders' to see available databases")
 
         # Get collections for main interface
         try:

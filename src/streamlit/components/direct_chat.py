@@ -48,14 +48,14 @@ def Direct_Chat():
         if use_rag:
             if collections:
                 collection_name = st.selectbox(
-                    "Document Collection:", collections, key="chat_coll"
+                    "Document Folder:", collections, key="chat_coll"
                 )
 
                 # Option to filter by specific document
                 filter_by_doc = st.checkbox(
                     "Filter by specific document?",
                     key="filter_by_document",
-                    help="Enable this to search within a specific document instead of the entire collection"
+                    help="Enable this to search within a specific document instead of the entire folder"
                 )
 
                 if filter_by_doc:
@@ -85,11 +85,11 @@ def Direct_Chat():
                             document_id = doc_options[selected_display]
                             st.info(f" Will search within: {selected_display}")
                         else:
-                            st.warning("No documents found in this collection.")
+                            st.warning("No documents found in this folder.")
                     else:
                         st.info("Load documents using the button above to see available documents.")
             else:
-                st.warning("No collections available. Upload docs first.")
+                st.warning("No folders available. Upload docs first.")
 
         user_input = st.text_area(
             "Ask your question:", height=100,
@@ -100,7 +100,7 @@ def Direct_Chat():
             if not user_input:
                 st.warning("Please enter a question.")
             elif use_rag and not collection_name:
-                st.error("Please select a collection for RAG mode.")
+                st.error("Please select a folder for RAG mode.")
             else:
                 with st.spinner(f"{mode} is analyzing..."):
                     try:
@@ -180,7 +180,7 @@ def _render_agent_pipeline_tab(collections: List[str]):
     Render the Agent Pipeline tab for running agent set pipelines with RAG support.
     """
     st.subheader("Agent Set Pipeline with RAG")
-    st.caption("Run a complete agent pipeline on your query, enhanced with document context from your collections")
+    st.caption("Run a complete agent pipeline on your query, enhanced with document context from your folders")
 
     # Check for active pipeline
     if "direct_chat_pipeline_id" in st.session_state and st.session_state.direct_chat_pipeline_id:
@@ -242,7 +242,7 @@ def _render_agent_pipeline_tab(collections: List[str]):
             return
 
         if rag_config.use_rag and not rag_config.collection_name:
-            st.error("Please select a collection for RAG context")
+            st.error("Please select a folder for RAG context")
             return
 
         # Build payload using shared function
@@ -280,4 +280,3 @@ def _render_agent_pipeline_tab(collections: List[str]):
             key_prefix="dc_pipeline",
             session_key="direct_chat_pipeline_id"
         )
-

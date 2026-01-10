@@ -80,6 +80,45 @@ from schemas.chat import (
     ChatSessionListResponse,
 )
 
+# User schemas
+from schemas.user import (
+    CreateUserRequest,
+    UpdateUserRequest,
+    UserResponse,
+    UserListResponse,
+)
+
+# Calendar schemas
+from schemas.calendar import (
+    CreateCalendarEventRequest,
+    UpdateCalendarEventRequest,
+    CalendarEventResponse,
+    CalendarEventListResponse,
+)
+
+# Versioning schemas
+from schemas.versioning import (
+    CreateTestPlanRequest,
+    UpdateTestPlanRequest,
+    TestPlanResponse,
+    TestPlanCreateResponse,
+    TestPlanListResponse,
+    CreateTestPlanVersionRequest,
+    TestPlanVersionResponse,
+    TestPlanVersionListResponse,
+    CreateTestCardRequest,
+    UpdateTestCardRequest,
+    TestCardResponse,
+    TestCardCreateResponse,
+    TestCardListResponse,
+    CreateTestCardVersionRequest,
+    TestCardVersionResponse,
+    TestCardVersionListResponse,
+    CreateDocumentVersionRequest,
+    DocumentVersionResponse,
+    DocumentVersionListResponse,
+)
+
 # Export all schemas
 __all__ = [
     # Common
@@ -130,4 +169,37 @@ __all__ = [
     "ChatHistoryResponse",
     "ChatSessionSummary",
     "ChatSessionListResponse",
+
+    # Users
+    "CreateUserRequest",
+    "UpdateUserRequest",
+    "UserResponse",
+    "UserListResponse",
+
+    # Calendar
+    "CreateCalendarEventRequest",
+    "UpdateCalendarEventRequest",
+    "CalendarEventResponse",
+    "CalendarEventListResponse",
+
+    # Versioning
+    "CreateTestPlanRequest",
+    "UpdateTestPlanRequest",
+    "TestPlanResponse",
+    "TestPlanCreateResponse",
+    "TestPlanListResponse",
+    "CreateTestPlanVersionRequest",
+    "TestPlanVersionResponse",
+    "TestPlanVersionListResponse",
+    "CreateTestCardRequest",
+    "UpdateTestCardRequest",
+    "TestCardResponse",
+    "TestCardCreateResponse",
+    "TestCardListResponse",
+    "CreateTestCardVersionRequest",
+    "TestCardVersionResponse",
+    "TestCardVersionListResponse",
+    "CreateDocumentVersionRequest",
+    "DocumentVersionResponse",
+    "DocumentVersionListResponse",
 ]

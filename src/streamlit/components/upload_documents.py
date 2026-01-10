@@ -29,9 +29,9 @@ def browse_documents(key_prefix: str = "",):
     def pref(k): return f"{key_prefix}_{k}" if key_prefix else k
 
     if st.session_state.collections:
-        # Collection selector
+        # Folder selector
         col = st.selectbox(
-            "Select Collection to Browse",
+            "Select Folder to Browse",
             st.session_state.collections,
             key=pref("browse_collection")
         )
@@ -100,14 +100,14 @@ def browse_documents(key_prefix: str = "",):
                             if selected_doc_info['has_images']:
                                 st.caption("Contains images")
             else:
-                st.info("No documents found in this collection.")
+                st.info("No documents found in this folder.")
     else:
-        st.warning("No collections available. Upload or create one first.") 
+        st.warning("No folders available. Upload or create one first.") 
 
 def query_documents(key_prefix: str = "",):
     def pref(k): return f"{key_prefix}_{k}" if key_prefix else k
     if st.session_state.collections:
-        query_collection = st.selectbox("Select Collection to Query", st.session_state.collections, key=pref("query_collection"))
+        query_collection = st.selectbox("Select Folder to Query", st.session_state.collections, key=pref("query_collection"))
         query_text = st.text_input("Enter your search query", placeholder="e.g., 'dog with tongue out' or 'red square with text'", key=pref("query_text"))
         n_results = st.slider("Number of results", min_value=1, max_value=20, value=5)
         
@@ -157,7 +157,7 @@ def view_images(key_prefix: str = "",):
         st.session_state[result_key] = None
 
     if st.session_state.collections:
-        reconstruct_collection = st.selectbox("Select Collection", st.session_state.collections, key=pref("reconstruct_collection"))
+        reconstruct_collection = st.selectbox("Select Folder", st.session_state.collections, key=pref("reconstruct_collection"))
 
         # Load documents in the selected collection (like Document Generator)
         if st.button("Load Documents", key=pref("load_reconstruct_docs")):
@@ -340,38 +340,38 @@ def render_upload_component(
         # # Refresh collections
         col_refresh, _ = st.columns([1, 3])
         with col_refresh:
-            if st.button("Refresh Collections", key=pref("refresh_collections")):
+            if st.button("Refresh Folders", key=pref("refresh_collections")):
                 try:
-                    with st.spinner("Loading collections..."):
+                    with st.spinner("Loading folders..."):
                         new = load_collections_func()
                         st.session_state.collections = new
-                        st.success("Collections updated")
+                        st.success("Folders updated")
                         st.dataframe(new, width='stretch')
                 except Exception as e:
-                    st.error(f"Failed to load collections: {e}")
+                    st.error(f"Failed to load folders: {e}")
         
 
         # Choose to use or create
         action = st.radio(
-            "Collection Action:",
-            ["Use Existing Collection", "Create New Collection"],
+            "Folder Action:",
+            ["Use Existing Folder", "Create New Folder"],
             horizontal=True,
             key=pref("create_or_use")
         )
 
         target_collection = None
-        if action == "Use Existing Collection":
+        if action == "Use Existing Folder":
             if available_collections:
                 target_collection = st.selectbox(
-                    "Select Collection:",
+                    "Select Folder:",
                     available_collections,
                     key=pref("browse_collection")
                 )
             else:
-                st.warning("No collections available. Create one below.")
+                st.warning("No folders available. Create one below.")
         else:
             new_name = st.text_input(
-                "New Collection Name:",
+                "New Folder Name:",
                 placeholder="e.g. standards, templates, policies"
             )
             
@@ -388,7 +388,7 @@ def render_upload_component(
                 
                 # Ensure length is 3-63 characters
                 if len(normalized_name) < 3:
-                    normalized_name = normalized_name + "_collection"
+                    normalized_name = normalized_name + "_folder"
                 elif len(normalized_name) > 63:
                     normalized_name = normalized_name[:60] + "..."
                     # Ensure it still ends with alphanumeric after truncation
@@ -396,24 +396,24 @@ def render_upload_component(
                 
                 # Show normalization if changed
                 if normalized_name != new_name:
-                    st.info(f"Collection name will be normalized to: `{normalized_name}`")
+                    st.info(f"Folder name will be normalized to: `{normalized_name}`")
                 
                 # Validate final name
                 if len(normalized_name) < 3:
-                    st.error("Collection name must be at least 3 characters after normalization")
+                    st.error("Folder name must be at least 3 characters after normalization")
                     new_name = None
                 else:
                     new_name = normalized_name
                     
             if new_name:
-                if st.button("Create Collection"):
+                if st.button("Create Folder"):
                     try:
                         with st.spinner(f"Creating '{new_name}'..."):
                             create_collection_func(new_name)
-                            st.success(f"Created collection '{new_name}'")
+                            st.success(f"Created folder '{new_name}'")
                             target_collection = new_name
                     except Exception as e:
-                        st.error(f"Failed to create collection: {e}")
+                        st.error(f"Failed to create folder: {e}")
 
         st.markdown("---")
         st.subheader("Upload Documents")
@@ -428,30 +428,19 @@ def render_upload_component(
         url = st.text_input(
             "Enter product page URL (optional):",
             placeholder="https://example.com/product/1234",
-            key="ingest_url"
+            key=pref("ingest_url")
         )
 
         # Vision model selection
         st.subheader("Vision Models")
-        openai_v = st.checkbox("OpenAI Vision", value=False, key=pref("openai_vision"))
-        hf_v = st.checkbox("HuggingFace BLIP Vision", value=False, key=pref("hf_vision"))
-
-        # Ollama Vision Models
-        st.caption("Ollama Vision Models (Local)")
-        llava_7b_v = st.checkbox("LLaVA 1.6 7B", value=False, key=pref("llava_7b_vision"))
+        st.caption("LLaVA Vision Models (Local)")
+        llava_7b_v = st.checkbox("LLaVA 1.6 7B", value=True, key=pref("llava_7b_vision"))
         llava_13b_v = st.checkbox("LLaVA 1.6 13B", value=False, key=pref("llava_13b_vision"))
-        granite_v = st.checkbox("Granite Vision 2B", value=False, key=pref("granite_vision"))
-
-        enhanced_v = st.checkbox("Enhanced Vision Model", value=False, key=pref("enhanced_vision"))
-        basic_v = st.checkbox("Basic Vision Model", value=False, key=pref("basic_vision"))
         vision_models = []
-        if openai_v: vision_models.append("openai")
-        if hf_v: vision_models.append("huggingface")
         if llava_7b_v: vision_models.append("llava_7b")
         if llava_13b_v: vision_models.append("llava_13b")
-        if granite_v: vision_models.append("granite_vision_2b")
-        if enhanced_v: vision_models.append("enhanced_local")
-        if basic_v: vision_models.append("basic")
+        if not vision_models:
+            vision_models = ["llava_7b"]
 
         # Chunk settings
         st.subheader("Chunk Settings")
@@ -460,7 +449,7 @@ def render_upload_component(
 
         if st.button("Upload and Process", key=pref("upload_button")):
             if not target_collection:
-                st.error("Please select or create a collection first.")
+                st.error("Please select or create a folder first.")
             elif not uploaded and not url:
                 st.error("Please choose at least one file or enter a URL.")
             else:
@@ -507,7 +496,7 @@ def render_upload_component(
                 try:
                     with st.spinner("Ingesting web page…"):
                         data = chromadb_service.ingest_url(url=url, collection_name=target_collection)
-                    st.success(f"Ingested URL into collection {target_collection}")
+                    st.success(f"Ingested URL into folder {target_collection}")
                     st.session_state['collections'] = chromadb_service.get_collections()
                 except Exception as e:
                     st.error(f"URL ingestion failed: {e}")

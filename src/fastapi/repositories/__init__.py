@@ -30,6 +30,15 @@ from repositories.response_repository import ResponseRepository, ComplianceRepos
 from repositories.citation_repository import CitationRepository
 from repositories.chat_repository import ChatRepository
 from repositories.unit_of_work import UnitOfWork, UnitOfWorkFactory
+from repositories.user_repository import UserRepository
+from repositories.calendar_repository import CalendarEventRepository
+from repositories.versioning_repository import (
+    TestPlanRepository,
+    TestPlanVersionRepository,
+    TestCardRepository,
+    TestCardVersionRepository,
+    DocumentVersionRepository,
+)
 
 __all__ = [
     "BaseRepository",
@@ -41,4 +50,11 @@ __all__ = [
     "ChatRepository",
     "UnitOfWork",
     "UnitOfWorkFactory",
+    "UserRepository",
+    "CalendarEventRepository",
+    "TestPlanRepository",
+    "TestPlanVersionRepository",
+    "TestCardRepository",
+    "TestCardVersionRepository",
+    "DocumentVersionRepository",
 ]

@@ -299,7 +299,7 @@ def Chat_History(key_prefix: str = "",):
                     with meta_col3:
                         collection = rec.get('collection_name', '')
                         if collection:
-                            st.caption(f"**Collection**: {collection}")
+                            st.caption(f"**Folder**: {collection}")
 
                     st.divider()
 

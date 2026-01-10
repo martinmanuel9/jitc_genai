@@ -10,7 +10,7 @@ from services.chromadb_service import chromadb_service
 from components.job_status_monitor import JobStatusMonitor
 
 
-def Document_Generator():
+def Document_Generator(allow_stop: bool = True):
     st.header("Document Generator")
     # ----------------------------
     # Load pipeline_id from URL first (before anything else)
@@ -99,7 +99,9 @@ def Document_Generator():
         monitor.render()
 
         # Stop here - don't show form fields when pipeline is active
-        st.stop()
+        if allow_stop:
+            st.stop()
+        return
 
     # ----------------------------
     # No active pipeline - show form fields
@@ -153,12 +155,12 @@ def Document_Generator():
     collections = st.session_state.collections
 
     if not collections:
-        st.warning("No collections available. Please upload documents first.")
+        st.warning("No folders available. Please upload documents first.")
         st.stop()
 
     # Pick collection & load source docs
     source_collection = st.selectbox(
-        "Select Collection",
+        "Select Folder",
         collections,
         key="gen_source_coll",
     )

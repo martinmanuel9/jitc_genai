@@ -45,20 +45,21 @@ load_dotenv()
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
 VISION_CONFIG = {
-            "openai_enabled": bool(openai_api_key),
+            "openai_enabled": False,
             "ollama_enabled": True,
-            "huggingface_enabled": True,
+            "huggingface_enabled": False,
             "enhanced_local_enabled": True,
             "ollama_url": os.getenv("OLLAMA_URL", "http://ollama:11434"),
             "ollama_model": os.getenv("OLLAMA_VISION_MODEL", "llava:7b"),
             "huggingface_model": os.getenv("HUGGINGFACE_VISION_MODEL", "Salesforce/blip-image-captioning-base"),
-            # Ollama vision model mappings
+            # Ollama vision model mappings (LLaVA only)
             "ollama_models": {
                 "llava_7b": "llava:7b",
-                "llava_13b": "llava:13b",
-                "granite_vision_2b": "granite3.2-vision:2b"
+                "llava_13b": "llava:13b"
             }
         }
+MAX_LLAVA_IMAGES = int(os.getenv("VISION_MAX_LLAVA_IMAGES", "50"))
+MAX_LLAVA_TIMEOUTS = int(os.getenv("VISION_MAX_LLAVA_TIMEOUTS", "5"))
 
 # Image storage directory
 IMAGES_DIR = os.getenv("IMAGES_STORAGE_DIR", os.path.join(os.getcwd(), "stored_images"))
@@ -245,7 +246,7 @@ def describe_with_ollama_vision(image_path: str, model_key: str = None) -> Optio
                 "images": [img_data],
                 "stream": False
             },
-            timeout= (10, 60)
+            timeout=(5, 20)
         )
 
         if response.status_code == 200:
@@ -458,6 +459,19 @@ async def describe_images_for_pages(
     enabled_models: set[str] = frozenset(),
     vision_flags: dict[str,bool] = {}
 ) -> List[Dict]:
+    llava_attempts = 0
+    llava_failures = 0
+    llava_disabled = False
+
+    def _llava_available() -> bool:
+        if llava_disabled:
+            return False
+        if llava_attempts >= MAX_LLAVA_IMAGES:
+            return False
+        if llava_failures >= MAX_LLAVA_TIMEOUTS:
+            return False
+        return True
+
     for page in pages_data:
         descs = []
         for img_item in page["images"]:
@@ -476,47 +490,64 @@ async def describe_images_for_pages(
 
             if run_all_models:
                 all_desc = {}
-                if "openai" in enabled_models and vision_flags.get("openai", False):
-                    d = await describe_with_openai_markitdown(img_path, api_key_override)
-                    if d:
-                        all_desc["OpenAI"] = d
-                # Handle specific Ollama vision models
-                for ollama_key in ["llava_7b", "llava_13b", "granite_vision_2b"]:
-                    if ollama_key in enabled_models and vision_flags.get(ollama_key, False):
+                for ollama_key in ["llava_7b", "llava_13b"]:
+                    if ollama_key in enabled_models and vision_flags.get(ollama_key, False) and _llava_available():
+                        llava_attempts += 1
                         d = describe_with_ollama_vision(img_path, model_key=ollama_key)
                         if d:
-                            all_desc[f"Ollama_{ollama_key}"] = d
-                # Legacy ollama support (backward compatibility)
-                if "ollama" in enabled_models and vision_flags.get("ollama", False):
-                    d = describe_with_ollama_vision(img_path)
-                    if d: all_desc["Ollama"] = d
-                if "huggingface" in enabled_models and vision_flags.get("huggingface", False):
-                    d = describe_with_huggingface_vision(img_path)
-                    if d: all_desc["HuggingFace"] = d
+                            all_desc[f"LLaVA_{ollama_key}"] = d
+                        else:
+                            llava_failures += 1
+
+                if not all_desc and _llava_available():
+                    llava_attempts += 1
+                    d = describe_with_ollama_vision(img_path, model_key="llava_7b")
+                    if d:
+                        all_desc["LLaVA_llava_7b"] = d
+                    else:
+                        llava_failures += 1
+
+                if llava_failures >= MAX_LLAVA_TIMEOUTS and not llava_disabled:
+                    llava_disabled = True
+                    logger.warning(
+                        "Disabling LLaVA for remaining images after %s failures",
+                        llava_failures,
+                    )
+
                 if "enhanced_local" in enabled_models and vision_flags.get("enhanced_local", False):
                     d = enhanced_local_image_analysis(img_path)
-                    if d: all_desc["Enhanced Local"] = d
+                    if d:
+                        all_desc["Enhanced Local"] = d
 
-                # always include basic fallback
                 all_desc["Basic Fallback"] = basic_image_analysis(img_path)
                 descs.append(create_combined_description(all_desc, Path(img_path).name))
 
             else:
-                # first‐success only among enabled & flagged
                 d = None
-                if "openai" in enabled_models and vision_flags.get("openai", False):
-                    d = await describe_with_openai_markitdown(img_path, api_key_override)
-                # Try specific Ollama models
-                for ollama_key in ["llava_7b", "llava_13b", "granite_vision_2b"]:
-                    if not d and ollama_key in enabled_models and vision_flags.get(ollama_key, False):
+                for ollama_key in ["llava_7b", "llava_13b"]:
+                    if ollama_key in enabled_models and vision_flags.get(ollama_key, False) and _llava_available():
+                        llava_attempts += 1
                         d = describe_with_ollama_vision(img_path, model_key=ollama_key)
-                # Legacy ollama support (backward compatibility)
-                if not d and "ollama" in enabled_models and vision_flags.get("ollama", False):
-                    d = describe_with_ollama_vision(img_path)
-                if not d and "huggingface" in enabled_models and vision_flags.get("huggingface", False):
-                    d = describe_with_huggingface_vision(img_path)
+                        if d:
+                            break
+                        llava_failures += 1
+
+                if not d and _llava_available():
+                    llava_attempts += 1
+                    d = describe_with_ollama_vision(img_path, model_key="llava_7b")
+                    if not d:
+                        llava_failures += 1
+
+                if llava_failures >= MAX_LLAVA_TIMEOUTS and not llava_disabled:
+                    llava_disabled = True
+                    logger.warning(
+                        "Disabling LLaVA for remaining images after %s failures",
+                        llava_failures,
+                    )
+
                 if not d and "enhanced_local" in enabled_models and vision_flags.get("enhanced_local", False):
                     d = enhanced_local_image_analysis(img_path)
+
                 descs.append(d or basic_image_analysis(img_path))
 
         page["image_descriptions"] = descs
@@ -1507,12 +1538,10 @@ def run_ingest_job(
                             if not d:
                                 continue
                             ld = d.lower()
-                            if ld.startswith("openai vision"):
-                                models_used.add("openai")
+                            if "llava" in ld:
+                                models_used.add("llava")
                             elif ld.startswith("ollama vision"):
                                 models_used.add("ollama")
-                            elif ld.startswith("huggingface blip"):
-                                models_used.add("huggingface")
                             elif ld.startswith("enhanced local"):
                                 models_used.add("enhanced_local")
                             elif ld.startswith("basic fallback"):

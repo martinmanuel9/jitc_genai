@@ -555,6 +555,8 @@ class DocumentService:
         source_doc_ids: Optional[List[str]] = None,
         doc_title: Optional[str] = None,
         agent_set_id: int = None,
+        sectioning_strategy: Optional[str] = None,
+        chunks_per_section: Optional[int] = None,
         pipeline_id: str = None,
     ) -> List[dict]:
         """
@@ -573,6 +575,14 @@ class DocumentService:
         """
         try:
             print("===== STARTING MULTI-AGENT TEST PLAN GENERATION =====")
+            print(f"Input parameters: collections={source_collections}, doc_ids={source_doc_ids}, title={doc_title}, agent_set={agent_set_id}")
+
+            # Validate inputs
+            if not source_collections or len(source_collections) == 0:
+                raise ValueError("source_collections is required and must not be empty")
+            
+            if agent_set_id is None:
+                raise ValueError("agent_set_id is required for test plan generation")
 
             # Use the multi-agent test plan service
             test_plan_result = self.multi_agent_test_plan_service.generate_multi_agent_test_plan(
@@ -580,10 +590,16 @@ class DocumentService:
                 source_doc_ids=source_doc_ids or [],
                 doc_title=doc_title or "Test Plan",
                 agent_set_id=agent_set_id,
-                pipeline_id=pipeline_id
+                pipeline_id=pipeline_id,
+                sectioning_strategy=sectioning_strategy,
+                chunks_per_section=chunks_per_section
             )
             
+            if not test_plan_result:
+                raise ValueError("Test plan generation returned no result")
+            
             print(f"Multi-agent pipeline generated: {test_plan_result.total_requirements} requirements, {test_plan_result.total_test_procedures} procedures from {test_plan_result.total_sections} sections")
+            print(f"Processing status: {test_plan_result.processing_status}")
 
             docx_b64 = None
             chromadb_result = {}
@@ -613,9 +629,9 @@ class DocumentService:
                 "title": test_plan_result.title,
                 "content": test_plan_result.consolidated_markdown,
                 "docx_b64": docx_b64,
-                "document_id": chromadb_result.get("document_id"),
-                "collection_name": chromadb_result.get("collection_name"),
-                "generated_at": chromadb_result.get("generated_at"),
+                "document_id": chromadb_result.get("document_id") if chromadb_result else None,
+                "collection_name": chromadb_result.get("collection_name") if chromadb_result else None,
+                "generated_at": chromadb_result.get("generated_at") if chromadb_result else None,
                 "processing_status": test_plan_result.processing_status,
                 "meta": {
                     "architecture": "multi_agent_gpt4_pipeline",
@@ -625,19 +641,20 @@ class DocumentService:
                     "agent_configuration": "3x_gpt4_actors_1x_critic_1x_final_critic",
                     "redis_pipeline": True,
                     "scalable_processing": True,
-                    "chromadb_saved": chromadb_result.get("saved", False),
+                    "chromadb_saved": chromadb_result.get("saved", False) if chromadb_result else False,
                     "sections_processed": len(test_plan_result.sections),
                     "pipeline_id": pipeline_id
-                }
+                },
+                "_final_test_plan": test_plan_result  # Store object for JSON conversion
             }]
             
         except Exception as e:
-            print(f"Error in multi-agent test plan generation: {e}")
+            logger.error(f"Error in multi-agent test plan generation: {e}")
             import traceback
-            traceback.print_exc()
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             return [{
                 "title": doc_title or "Test Plan",
-                "content": f"Error in multi-agent generation: {str(e)}",
+                "content": f"Error in multi-agent generation: {str(e)}\n\n{traceback.format_exc()}",
                 "error": str(e),
                 "processing_status": "ERROR"
             }]

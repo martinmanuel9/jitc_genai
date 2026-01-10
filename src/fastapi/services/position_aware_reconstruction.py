@@ -177,10 +177,9 @@ def insert_images_at_positions(
 
         # Track vision models
         desc = img_pos.get("description", "")
-        if "openai" in desc.lower():
-            metadata["vision_models_used"].add("openai")
-        if "huggingface" in desc.lower():
-            metadata["vision_models_used"].add("huggingface")
+        desc_lower = desc.lower()
+        if "llava" in desc_lower:
+            metadata["vision_models_used"].add("llava")
 
     # Insert images in reverse order (to preserve positions)
     insertions.sort(key=lambda x: x[0], reverse=True)

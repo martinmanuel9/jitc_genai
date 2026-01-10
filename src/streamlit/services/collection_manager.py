@@ -97,7 +97,7 @@ class CollectionManager:
 
     @staticmethod
     def refresh_button(
-        button_text: str = "Refresh Collections",
+        button_text: str = "Refresh Folders",
         key: str = "refresh_collections",
         show_count: bool = True,
         use_container_width: bool = False
@@ -115,18 +115,18 @@ class CollectionManager:
             True if refresh was successful
         """
         if st.button(button_text, key=key, use_container_width=use_container_width):
-            with st.spinner("Loading collections..."):
+            with st.spinner("Loading folders..."):
                 success = CollectionManager.refresh_collections()
 
                 if success:
                     collections = st.session_state.collections
                     if show_count:
-                        st.success(f"Loaded {len(collections)} collection(s)")
+                        st.success(f"Loaded {len(collections)} folder(s)")
                     else:
-                        st.success("Collections refreshed successfully")
+                        st.success("Folders refreshed successfully")
                     return True
                 else:
-                    st.error("Failed to refresh collections")
+                    st.error("Failed to refresh folders")
                     return False
 
         return False

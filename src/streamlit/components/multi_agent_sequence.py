@@ -89,16 +89,16 @@ def multi_agent_sequence_debate(agents, agent_choices, collections):
             )
             
             # RAG context option
-            use_rag_debate = st.checkbox("Add RAG context from collections", key="sequence_rag")
+            use_rag_debate = st.checkbox("Add RAG context from folders", key="sequence_rag")
             if use_rag_debate and collections:
                 collection_for_debate = st.selectbox(
-                    "ChromaDB Collection (for RAG context):", 
+                    "ChromaDB Folder (for RAG context):", 
                     collections,
                     key="sequence_rag_collection",
-                    help="Select a collection to provide additional context"
+                    help="Select a folder to provide additional context"
                 )
             elif use_rag_debate:
-                st.warning("No collections available. Agents will debate without RAG context.")
+                st.warning("No folders available. Agents will debate without RAG context.")
     
     # UPLOAD DOCUMENT 
     elif input_method == "Upload Document":
@@ -127,16 +127,16 @@ def multi_agent_sequence_debate(agents, agent_choices, collections):
                 key="sequence_upload_prompt"
             )
             
-            # Collection selection for uploaded document
+            # Folder selection for uploaded document
             if collections:
                 collection_for_debate = st.selectbox(
-                    "Select Collection (where document was uploaded):",
+                    "Select Folder (where document was uploaded):",
                     collections,
                     key="sequence_upload_collection",
-                    help="Choose the collection where you uploaded your document"
+                    help="Choose the folder where you uploaded your document"
                 )
             else:
-                st.warning("No collections available. Upload a document first.")
+                st.warning("No folders available. Upload a document first.")
     
     # USE EXISTING DOCUMENT
     elif input_method == "Use Existing Document":
@@ -192,7 +192,7 @@ def multi_agent_sequence_debate(agents, agent_choices, collections):
                     st.write(f"**Input Method**: {input_method}")
                     st.write(f"**Using RAG**: {'Yes' if collection_for_debate else 'No'}")
                     if collection_for_debate:
-                        st.write(f"**Collection**: {collection_for_debate}")
+                        st.write(f"**Folder**: {collection_for_debate}")
                 
                 # Prepare payload based on input method
                 if collection_for_debate:
@@ -337,7 +337,7 @@ def multi_agent_sequence_debate(agents, agent_choices, collections):
         
         **Direct Text Input:**
         - Enter text directly for immediate debate
-        - Optional RAG enhancement from collections
+        - Optional RAG enhancement from folders
         - Best for: Quick debates on specific topics or pasted content
         
         **Upload Document:**
@@ -347,7 +347,7 @@ def multi_agent_sequence_debate(agents, agent_choices, collections):
         
         **Use Existing Document:**
         - Select from previously uploaded documents
-        - Browse collections and select specific documents
+        - Browse folders and select specific documents
         - Best for: Getting fresh perspectives on existing documents
         
         **Step 3: Sequential Debate**

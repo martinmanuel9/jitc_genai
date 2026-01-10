@@ -165,6 +165,7 @@ def generate_test_cards(
                 "document_id": card["document_id"],
                 "document_name": card["document_name"],
                 "test_id": card["metadata"]["test_id"],
+                "requirement_id": card["metadata"].get("requirement_id", ""),
                 "section_title": card["metadata"]["section_title"]
             }
             for card in test_cards

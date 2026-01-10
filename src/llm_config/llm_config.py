@@ -27,6 +27,13 @@ class ModelConfig:
 
 MODEL_REGISTRY: Dict[str, ModelConfig] = {
     # --- OpenAI Models ---
+        # "gpt-5.2": ModelConfig(
+    #     model_id="gpt-5.2",
+    #     display_name="GPT-5.2",
+    #     description="Next-generation GPT-5.2 model with advanced reasoning and creativity capabilities",
+    #     provider="openai",
+    #     max_context_tokens=256000,
+    # ),
     # "gpt-5.1": ModelConfig(
     #     model_id="gpt-5.1",
     #     display_name="GPT-5.1",
@@ -130,6 +137,13 @@ MODEL_REGISTRY: Dict[str, ModelConfig] = {
     # All models below are from US-based organizations and run completely on-premises
 
     # Meta (US - California) - Llama 3.2 Series
+    "gpt-oss:latest": ModelConfig(
+        model_id="gpt-oss:latest",
+        display_name="GPT-OSS (Local)",
+        description="Open-source GPT-like model - 20.9B params (13.8GB disk)",
+        provider="ollama",
+        max_context_tokens=128000,
+    ),
     "llama3.2:1b": ModelConfig(
         model_id="llama3.2:1b",
         display_name="Llama 3.2 1B (Local)",

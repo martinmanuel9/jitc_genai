@@ -78,7 +78,7 @@ def render_rag_config(collections: List[str], key_prefix: str = "") -> PipelineR
         "Use RAG Context from Documents",
         value=True,
         key=pref("use_rag"),
-        help="Enhance agent analysis with relevant context from your document collections"
+        help="Enhance agent analysis with relevant context from your document folders"
     )
 
     rag_collection = None
@@ -88,10 +88,10 @@ def render_rag_config(collections: List[str], key_prefix: str = "") -> PipelineR
     if use_rag:
         if collections:
             rag_collection = st.selectbox(
-                "Document Collection",
+                "Document Folder",
                 collections,
                 key=pref("collection"),
-                help="Select the collection to retrieve context from"
+                help="Select the folder to retrieve context from"
             )
 
             col1, col2 = st.columns(2)
@@ -130,7 +130,7 @@ def render_rag_config(collections: List[str], key_prefix: str = "") -> PipelineR
                         )
                         rag_document_id = doc_options[selected_display]
         else:
-            st.warning("No collections available. Upload documents first.")
+            st.warning("No folders available. Upload documents first.")
             use_rag = False
 
     return PipelineRAGConfig(
@@ -349,7 +349,7 @@ def render_pipeline_result(
         st.metric("RAG Context", "Yes" if rag_used else "No")
 
     if rag_used:
-        st.caption(f"RAG Collection: {result.get('rag_collection', 'N/A')}")
+        st.caption(f"RAG Folder: {result.get('rag_collection', 'N/A')}")
 
     st.markdown("---")
 

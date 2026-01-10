@@ -6,9 +6,11 @@ Generate and execute test cards from test plans.
 import streamlit as st
 import pandas as pd
 import json
+import uuid
+from typing import Dict, List, Optional, Tuple
 from config.settings import config
 from app_lib.api.client import api_client
-from datetime import datetime
+from datetime import datetime, timezone
 from components.job_status_monitor import JobStatusMonitor
 
 
@@ -32,27 +34,390 @@ def TestCardViewer():
         render_test_card_executor()
 
 
+def _list_test_plans() -> Tuple[List[str], List[dict], Dict[str, dict]]:
+    response = api_client.get(
+        f"{config.fastapi_url}/api/vectordb/documents?collection_name=generated_test_plan",
+        timeout=30
+    )
+    doc_ids = response.get("ids", [])
+    metadatas = response.get("metadatas", [])
+    metadata_map = {
+        doc_id: (metadatas[idx] if idx < len(metadatas) else {})
+        for idx, doc_id in enumerate(doc_ids)
+    }
+    return doc_ids, metadatas, metadata_map
+
+
+def _fetch_plan_records() -> List[dict]:
+    response = api_client.get(
+        f"{config.fastapi_url}/api/versioning/test-plans",
+        timeout=30
+    )
+    return response.get("plans", [])
+
+
+def _find_plan_record(plan_key: str, plans: List[dict]) -> Optional[dict]:
+    for plan in plans:
+        if plan.get("plan_key") == plan_key:
+            return plan
+    return None
+
+
+def _list_plan_versions(plan_id: int) -> List[dict]:
+    response = api_client.get(
+        f"{config.fastapi_url}/api/versioning/test-plans/{plan_id}/versions",
+        timeout=30
+    )
+    return response.get("versions", [])
+
+
+def _ensure_plan_context(plan_key: str, plan_title: str, plan_doc_id: str) -> Tuple[dict, dict]:
+    plans = _fetch_plan_records()
+    plan = _find_plan_record(plan_key, plans)
+
+    if not plan:
+        created = api_client.post(
+            f"{config.fastapi_url}/api/versioning/test-plans",
+            data={
+                "plan_key": plan_key,
+                "title": plan_title,
+                "collection_name": "generated_test_plan",
+                "percent_complete": 0,
+                "document_id": plan_doc_id,
+                "based_on_version_id": None
+            },
+            timeout=30
+        )
+        return created["plan"], created["version"]
+
+    versions = _list_plan_versions(plan["id"])
+    for version in versions:
+        if version.get("document_id") == plan_doc_id:
+            return plan, version
+
+    base_version_id = versions[0]["id"] if versions else None
+    new_version = api_client.post(
+        f"{config.fastapi_url}/api/versioning/test-plans/{plan['id']}/versions",
+        data={
+            "document_id": plan_doc_id,
+            "based_on_version_id": base_version_id
+        },
+        timeout=30
+    )
+    return plan, new_version
+
+
+def _list_cards_for_plan(plan_id: int) -> List[dict]:
+    response = api_client.get(
+        f"{config.fastapi_url}/api/versioning/test-cards",
+        params={"plan_id": plan_id},
+        timeout=30
+    )
+    return response.get("cards", [])
+
+
+def _list_card_versions(card_id: int) -> List[dict]:
+    response = api_client.get(
+        f"{config.fastapi_url}/api/versioning/test-cards/{card_id}/versions",
+        timeout=30
+    )
+    return response.get("versions", [])
+
+
+def _get_latest_doc_ids_for_plan(plan_id: int) -> List[str]:
+    latest_doc_ids: List[str] = []
+    cards = _list_cards_for_plan(plan_id)
+    for card in cards:
+        versions = _list_card_versions(card["id"])
+        if versions:
+            latest_doc_ids.append(versions[0]["document_id"])
+    return latest_doc_ids
+
+
+def _filter_latest_cards(cards: List[dict], plan_id: Optional[int]) -> List[dict]:
+    if not plan_id:
+        return cards
+
+    latest_doc_ids = _get_latest_doc_ids_for_plan(plan_id)
+    if not latest_doc_ids:
+        return cards
+
+    latest_set = set(latest_doc_ids)
+    return [card for card in cards if card.get("document_id") in latest_set]
+
+
+def _build_updated_metadata(card: dict, updates: dict) -> dict:
+    base = dict(card.get("metadata") or {})
+
+    for field in [
+        "test_plan_id",
+        "test_plan_title",
+        "section_title",
+        "test_id",
+        "test_title",
+        "requirement_id",
+        "requirement_text",
+        "execution_status",
+        "executed_by",
+        "executed_at",
+        "execution_duration_minutes",
+        "passed",
+        "failed",
+        "notes",
+        "actual_results",
+    ]:
+        if field not in base and field in card:
+            base[field] = card[field]
+
+    if "document_name" in updates:
+        base["document_name"] = updates["document_name"]
+        base["test_title"] = updates["document_name"]
+    if "requirement_text" in updates:
+        base["requirement_text"] = updates["requirement_text"]
+    if "execution_status" in updates:
+        base["execution_status"] = updates["execution_status"]
+    if "passed" in updates:
+        base["passed"] = updates["passed"]
+    if "failed" in updates:
+        base["failed"] = updates["failed"]
+    if "notes" in updates:
+        base["notes"] = updates["notes"]
+    if "executed_by" in updates:
+        base["executed_by"] = updates["executed_by"]
+    if "executed_at" in updates:
+        base["executed_at"] = updates["executed_at"]
+    if "execution_duration_minutes" in updates:
+        base["execution_duration_minutes"] = updates["execution_duration_minutes"]
+    if "actual_results" in updates:
+        base["actual_results"] = updates["actual_results"]
+
+    return base
+
+
+def _create_test_card_version(
+    card: dict,
+    updates: dict,
+    updated_content: str,
+    plan_key: str,
+    plan_title: str,
+    plan_doc_id: str
+) -> None:
+    plan, plan_version = _ensure_plan_context(plan_key, plan_title, plan_doc_id)
+    plan_id = plan["id"]
+    plan_version_id = plan_version["id"]
+
+    existing_cards = _list_cards_for_plan(plan_id)
+    card_map = {item.get("card_key"): item for item in existing_cards if item.get("card_key")}
+
+    test_id = card.get("test_id") or card.get("document_id")
+    requirement_id = card.get("requirement_id") or ""
+    preferred_key = f"{plan_key}:{requirement_id or test_id}"
+    fallback_key = f"{plan_key}:{test_id}"
+
+    existing = card_map.get(preferred_key) or card_map.get(fallback_key)
+    base_version_id = None
+    card_id = None
+
+    if existing:
+        card_id = existing["id"]
+        versions = _list_card_versions(card_id)
+        base_version_id = versions[0]["id"] if versions else None
+
+    new_doc_id = f"testcard_{plan_doc_id}_{test_id}_{uuid.uuid4().hex[:8]}"
+    metadata = _build_updated_metadata(card, updates)
+    metadata["test_plan_id"] = plan_doc_id
+    metadata["test_plan_title"] = plan_title
+    metadata["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    api_client.post(
+        f"{config.fastapi_url}/api/vectordb/documents/add",
+        data={
+            "collection_name": "test_cards",
+            "documents": [updated_content],
+            "ids": [new_doc_id],
+            "metadatas": [metadata]
+        },
+        timeout=30
+    )
+
+    if not existing:
+        api_client.post(
+            f"{config.fastapi_url}/api/versioning/test-cards",
+            data={
+                "card_key": preferred_key,
+                "plan_id": plan_id,
+                "title": metadata.get("document_name") or card.get("document_name") or test_id,
+                "requirement_id": requirement_id or test_id,
+                "percent_complete": 0,
+                "document_id": new_doc_id,
+                "based_on_version_id": None,
+                "plan_version_id": plan_version_id
+            },
+            timeout=30
+        )
+        return
+
+    api_client.post(
+        f"{config.fastapi_url}/api/versioning/test-cards/{card_id}/versions",
+        data={
+            "document_id": new_doc_id,
+            "based_on_version_id": base_version_id,
+            "plan_version_id": plan_version_id
+        },
+        timeout=30
+    )
+
+
+def _record_test_card_versions(
+    job_id: str,
+    result_response: dict,
+    plan_key: str,
+    plan_title: str,
+    plan_doc_id: str
+) -> None:
+    if st.session_state.get("testcard_versions_recorded", {}).get(job_id):
+        return
+
+    plan, plan_version = _ensure_plan_context(plan_key, plan_title, plan_doc_id)
+    plan_id = plan["id"]
+    plan_version_id = plan_version["id"]
+
+    existing_cards = _list_cards_for_plan(plan_id)
+    card_map = {card.get("card_key"): card for card in existing_cards if card.get("card_key")}
+
+    test_cards = result_response.get("test_cards", [])
+    for card in test_cards:
+        test_id = card.get("test_id") or card.get("document_id")
+        requirement_id = card.get("requirement_id") or ""
+        preferred_key = f"{plan_key}:{requirement_id or test_id}"
+        fallback_key = f"{plan_key}:{test_id}"
+        document_id = card.get("document_id")
+        document_name = card.get("document_name") or test_id
+
+        existing = card_map.get(preferred_key) or card_map.get(fallback_key)
+        if not existing:
+            api_client.post(
+                f"{config.fastapi_url}/api/versioning/test-cards",
+                data={
+                    "card_key": preferred_key,
+                    "plan_id": plan_id,
+                    "title": document_name,
+                    "requirement_id": requirement_id or test_id,
+                    "percent_complete": 0,
+                    "document_id": document_id,
+                    "based_on_version_id": None,
+                    "plan_version_id": plan_version_id
+                },
+                timeout=30
+            )
+            continue
+
+        versions = _list_card_versions(existing["id"])
+        if any(v.get("document_id") == document_id for v in versions):
+            continue
+
+        base_version_id = versions[0]["id"] if versions else None
+        api_client.post(
+            f"{config.fastapi_url}/api/versioning/test-cards/{existing['id']}/versions",
+            data={
+                "document_id": document_id,
+                "based_on_version_id": base_version_id,
+                "plan_version_id": plan_version_id
+            },
+            timeout=30
+        )
+
+    recorded = st.session_state.get("testcard_versions_recorded", {})
+    recorded[job_id] = True
+    st.session_state.testcard_versions_recorded = recorded
+
+
+def _build_regen_baseline(test_cards: List[dict]) -> Dict[str, Dict[str, dict]]:
+    by_req: Dict[str, dict] = {}
+    by_test: Dict[str, dict] = {}
+    for card in test_cards:
+        baseline = {
+            "execution_status": card.get("execution_status", "not_executed"),
+            "passed": card.get("passed", False),
+            "failed": card.get("failed", False),
+            "notes": card.get("notes", ""),
+            "executed_by": card.get("executed_by", ""),
+            "executed_at": card.get("executed_at", ""),
+            "execution_duration_minutes": card.get("execution_duration_minutes", 0),
+            "actual_results": card.get("actual_results", "")
+        }
+        requirement_id = card.get("requirement_id") or ""
+        test_id = card.get("test_id") or ""
+        if requirement_id:
+            by_req[requirement_id] = baseline
+        if test_id:
+            by_test[test_id] = baseline
+    return {"by_req": by_req, "by_test": by_test}
+
+
+def _apply_regen_baseline(job_id: str, result_response: dict) -> None:
+    baseline_map = st.session_state.get("testcard_regen_baseline", {}).get(job_id)
+    if not baseline_map:
+        return
+
+    updates = []
+    for card in result_response.get("test_cards", []):
+        requirement_id = card.get("requirement_id") or ""
+        test_id = card.get("test_id") or ""
+        prior = baseline_map["by_req"].get(requirement_id) or baseline_map["by_test"].get(test_id)
+        if not prior:
+            continue
+
+        update_fields = {}
+        if prior.get("execution_status") and prior.get("execution_status") != "not_executed":
+            update_fields["execution_status"] = prior["execution_status"]
+        if "passed" in prior:
+            update_fields["passed"] = prior["passed"]
+        if "failed" in prior:
+            update_fields["failed"] = prior["failed"]
+        if prior.get("notes") is not None:
+            update_fields["notes"] = prior["notes"]
+        if prior.get("executed_by") is not None:
+            update_fields["executed_by"] = prior["executed_by"]
+        if prior.get("executed_at") is not None:
+            update_fields["executed_at"] = prior["executed_at"]
+        if "execution_duration_minutes" in prior:
+            update_fields["execution_duration_minutes"] = prior["execution_duration_minutes"]
+        if prior.get("actual_results") is not None:
+            update_fields["actual_results"] = prior["actual_results"]
+
+        if update_fields:
+            updates.append({
+                "document_id": card.get("document_id"),
+                "updates": update_fields
+            })
+
+    if not updates:
+        return
+
+    api_client.post(
+        f"{config.fastapi_url}/api/doc_gen/test-cards/bulk-update",
+        data={
+            "collection_name": "test_cards",
+            "updates": updates
+        },
+        timeout=30
+    )
+
+
 def render_test_card_generator():
     """Generate test cards from a test plan - simplified workflow"""
     st.subheader("Generate Test Cards")
 
     try:
-        # Fetch available test plans
-        response = api_client.get(
-            f"{config.fastapi_url}/api/vectordb/documents?collection_name=generated_test_plan",
-            timeout=30
-        )
-
-        doc_ids = response.get("ids", [])
-        metadatas = response.get("metadatas", [])
+        doc_ids, metadatas, metadata_map = _list_test_plans()
 
         if not doc_ids:
             st.info("No test plans found. Generate a test plan first using the Document Generator.")
             return
 
-        # Create simple dropdown options - just show document name for consistency
         plan_options = {
-            m.get('title', 'Untitled'): doc_id
+            f"{m.get('title', 'Untitled')} ({doc_id[:8]}...)": doc_id
             for doc_id, m in zip(doc_ids, metadatas)
         }
 
@@ -69,14 +434,43 @@ def render_test_card_generator():
             return
 
         selected_doc_id = plan_options[selected_plan]
-        selected_metadata = next(m for doc_id, m in zip(doc_ids, metadatas) if doc_id == selected_doc_id)
+        selected_metadata = metadata_map.get(selected_doc_id, {})
+        plan_key = selected_metadata.get("plan_key") or selected_doc_id
+        plan_title = selected_metadata.get("title", "Untitled Plan")
+
+        plan_record = _find_plan_record(plan_key, _fetch_plan_records())
+        plan_versions = _list_plan_versions(plan_record["id"]) if plan_record else []
+        selected_plan_version = None
+
+        if plan_versions:
+            version_options = {
+                f"v{v['version_number']} ({v['document_id'][:8]}...)": v
+                for v in plan_versions
+            }
+            selected_version_label = st.selectbox(
+                "Plan Version",
+                options=list(version_options.keys()),
+                key="selected_test_plan_version"
+            )
+            selected_plan_version = version_options[selected_version_label]
+
+        plan_doc_id_for_generation = (
+            selected_plan_version["document_id"]
+            if selected_plan_version
+            else selected_doc_id
+        )
+        plan_doc_metadata = metadata_map.get(plan_doc_id_for_generation, selected_metadata)
+        plan_title = plan_doc_metadata.get("title", plan_title)
+        plan_key = plan_doc_metadata.get("plan_key") or plan_key
 
         # Show plan details
         with st.expander("Test Plan Details"):
-            st.text(f"Document ID: {selected_doc_id}")
-            st.text(f"Generated: {selected_metadata.get('generated_at', 'N/A')}")
-            st.text(f"Sections: {selected_metadata.get('total_sections', 0)}")
-            st.text(f"Requirements: {selected_metadata.get('total_requirements', 0)}")
+            st.text(f"Document ID: {plan_doc_id_for_generation}")
+            st.text(f"Generated: {plan_doc_metadata.get('generated_at', 'N/A')}")
+            st.text(f"Sections: {plan_doc_metadata.get('total_sections', 0)}")
+            st.text(f"Requirements: {plan_doc_metadata.get('total_requirements', 0)}")
+            if selected_plan_version:
+                st.text(f"Plan Version: v{selected_plan_version['version_number']}")
 
         st.markdown("---")
 
@@ -156,14 +550,49 @@ def render_test_card_generator():
 
         col1, col2 = st.columns([3, 1])
 
+        existing_count = 0
+        baseline_payload = None
+        try:
+            existing_cards = api_client.post(
+                f"{config.endpoints.doc_gen}/query-test-cards",
+                data={
+                    "test_plan_id": plan_doc_id_for_generation,
+                    "collection_name": "test_cards"
+                },
+                timeout=30,
+                show_errors=False
+            )
+            existing_count = existing_cards.get("total_count", 0) if existing_cards else 0
+            cards_for_baseline = existing_cards.get("test_cards", []) if existing_cards else []
+            if plan_record:
+                cards_for_baseline = _filter_latest_cards(cards_for_baseline, plan_record["id"])
+            baseline_payload = _build_regen_baseline(cards_for_baseline) if cards_for_baseline else None
+        except Exception:
+            existing_count = 0
+            baseline_payload = None
+
+        confirm_regen = True
+        if existing_count:
+            st.warning(f"{existing_count} existing test cards found for this plan.")
+            confirm_regen = st.checkbox(
+                "Regenerate and carry over execution status/results/notes",
+                key=f"confirm_testcard_regen_{plan_doc_id_for_generation}"
+            )
+            st.caption(
+                "Carries: execution status, pass/fail, notes, executed by/at, duration, actual results."
+            )
+
         with col1:
             if st.button("Generate Test Cards", type="primary", use_container_width=True):
+                if existing_count and not confirm_regen:
+                    st.error("Please confirm regeneration to continue.")
+                    return
                 with st.spinner("Submitting generation request..."):
                     try:
                         response = api_client.post(
                             f"{config.endpoints.doc_gen}/generate-test-cards-from-plan-async",
                             data={
-                                "test_plan_id": selected_doc_id,
+                                "test_plan_id": plan_doc_id_for_generation,
                                 "collection_name": "generated_test_plan",
                                 "format": "markdown_table"
                             },
@@ -173,7 +602,18 @@ def render_test_card_generator():
                         job_id = response.get("job_id")
                         st.session_state.testcard_job_id = job_id
                         st.session_state.testcard_job_status = "queued"
-                        st.session_state.selected_test_plan_id = selected_doc_id
+                        st.session_state.selected_test_plan_id = plan_doc_id_for_generation
+                        contexts = st.session_state.get("testcard_job_contexts", {})
+                        contexts[job_id] = {
+                            "plan_key": plan_key,
+                            "plan_title": plan_title,
+                            "plan_doc_id": plan_doc_id_for_generation
+                        }
+                        st.session_state.testcard_job_contexts = contexts
+                        if existing_count and baseline_payload:
+                            baselines = st.session_state.get("testcard_regen_baseline", {})
+                            baselines[job_id] = baseline_payload
+                            st.session_state.testcard_regen_baseline = baselines
                         st.rerun()
 
                     except Exception as e:
@@ -187,6 +627,31 @@ def render_test_card_generator():
             def on_test_card_completed(result_response):
                 test_cards_count = result_response.get("test_cards_generated", 0)
                 st.success(f"Generated {test_cards_count} test cards successfully")
+
+                context = st.session_state.get("testcard_job_contexts", {}).get(job_id, {})
+                plan_key_context = context.get("plan_key") or result_response.get("test_plan_id", "")
+                plan_title_context = context.get("plan_title") or result_response.get("test_plan_title", "Untitled Plan")
+                plan_doc_context = context.get("plan_doc_id") or result_response.get("test_plan_id", "")
+
+                try:
+                    _apply_regen_baseline(job_id=job_id, result_response=result_response)
+                    baselines = st.session_state.get("testcard_regen_baseline", {})
+                    if job_id in baselines:
+                        baselines.pop(job_id, None)
+                        st.session_state.testcard_regen_baseline = baselines
+                except Exception as e:
+                    st.warning(f"Test card regeneration merge failed: {e}")
+
+                try:
+                    _record_test_card_versions(
+                        job_id=job_id,
+                        result_response=result_response,
+                        plan_key=plan_key_context,
+                        plan_title=plan_title_context,
+                        plan_doc_id=plan_doc_context
+                    )
+                except Exception as e:
+                    st.warning(f"Test card versioning failed: {e}")
 
                 st.markdown("---")
 
@@ -292,13 +757,7 @@ def render_test_card_executor():
 
     try:
         # Fetch available test plans
-        response = api_client.get(
-            f"{config.fastapi_url}/api/vectordb/documents?collection_name=generated_test_plan",
-            timeout=30
-        )
-
-        doc_ids = response.get("ids", [])
-        metadatas = response.get("metadatas", [])
+        doc_ids, metadatas, metadata_map = _list_test_plans()
 
         if not doc_ids:
             st.info("No test plans found.")
@@ -320,6 +779,10 @@ def render_test_card_executor():
             return
 
         selected_doc_id = plan_options[selected_plan]
+        selected_metadata = metadata_map.get(selected_doc_id, {})
+        plan_key = selected_metadata.get("plan_key") or selected_doc_id
+        plan_title = selected_metadata.get("title", "Untitled Plan")
+        plan_record = _find_plan_record(plan_key, _fetch_plan_records())
 
         # Query test cards for this test plan
         cards_response = api_client.post(
@@ -333,6 +796,9 @@ def render_test_card_executor():
 
         test_cards = cards_response.get("test_cards", [])
         total_count = cards_response.get("total_count", 0)
+        if plan_record:
+            test_cards = _filter_latest_cards(test_cards, plan_record["id"])
+            total_count = len(test_cards)
 
         if not test_cards:
             st.info("No test cards found for this test plan. Generate test cards first.")
@@ -343,6 +809,7 @@ def render_test_card_executor():
         # Display test cards in editable table format
         cards_data = []
         card_id_map = {}  # Map row index to card document_id for updates
+        cards_by_id = {card.get("document_id"): card for card in test_cards}
 
         for idx, card in enumerate(test_cards):
             card_id_map[idx] = card.get("document_id", "")
@@ -388,8 +855,8 @@ def render_test_card_executor():
         col1, col2 = st.columns([1, 4])
         with col1:
             if st.button("Save Changes", type="primary", use_container_width=True):
-                # Detect changes and prepare updates
-                updates = []
+                updated_count = 0
+                errors = []
                 for idx in range(len(df)):
                     if idx < len(edited_df):
                         # Check if any values changed
@@ -399,40 +866,36 @@ def render_test_card_executor():
                         if not original.equals(edited):
                             document_id = card_id_map.get(idx)
                             if document_id:
-                                updates.append({
-                                    "document_id": document_id,
-                                    "updates": {
-                                        "document_name": str(edited["Test Title"]),
-                                        "requirement_text": str(edited["Requirement"]),
-                                        "execution_status": str(edited["Status"]),
-                                        "passed": str(edited["Pass"]).lower(),
-                                        "failed": str(edited["Fail"]).lower(),
-                                        "notes": str(edited["Notes"])
-                                    }
-                                })
+                                card = cards_by_id.get(document_id, {})
+                                updates = {
+                                    "document_name": str(edited["Test Title"]),
+                                    "requirement_text": str(edited["Requirement"]),
+                                    "execution_status": str(edited["Status"]),
+                                    "passed": str(edited["Pass"]).lower(),
+                                    "failed": str(edited["Fail"]).lower(),
+                                    "notes": str(edited["Notes"])
+                                }
+                                updated_content = card.get("content") or card.get("content_preview", "")
+                                try:
+                                    _create_test_card_version(
+                                        card=card,
+                                        updates=updates,
+                                        updated_content=updated_content,
+                                        plan_key=plan_key,
+                                        plan_title=plan_title,
+                                        plan_doc_id=selected_doc_id
+                                    )
+                                    updated_count += 1
+                                except Exception as e:
+                                    errors.append(f"{document_id[:8]}...: {e}")
 
-                if updates:
-                    try:
-                        # Call API to update test cards
-                        import requests
-                        update_response = requests.post(
-                            f"{config.fastapi_url}/api/doc_gen/test-cards/bulk-update",
-                            json={
-                                "collection_name": "test_cards",
-                                "updates": updates
-                            },
-                            timeout=30
-                        )
-
-                        if update_response.status_code == 200:
-                            result = update_response.json()
-                            st.success(f"Successfully updated {result.get('updated_count', 0)} test cards")
-                            st.rerun()
-                        else:
-                            st.error(f"Update failed: {update_response.text}")
-
-                    except Exception as e:
-                        st.error(f"Failed to save changes: {str(e)}")
+                if updated_count and not errors:
+                    st.success(f"Successfully updated {updated_count} test cards")
+                    st.rerun()
+                elif errors:
+                    st.error("Some updates failed: " + "; ".join(errors))
+                    if updated_count:
+                        st.warning(f"{updated_count} test card updates succeeded before errors")
                 else:
                     st.info("No changes detected")
 
@@ -673,8 +1136,6 @@ def render_test_card_executor():
 
                 if changes_detected:
                     try:
-                        import requests
-
                         # Build update payload
                         update_payload = {
                             "document_name": edited_title,
@@ -684,6 +1145,7 @@ def render_test_card_executor():
                             "failed": str(edited_failed).lower(),
                             "notes": edited_notes
                         }
+                        updated_content = selected_card.get("content") or selected_card.get("content_preview", "")
 
                         # Reconstruct markdown table if procedures were edited
                         if procedures_changed:
@@ -694,25 +1156,19 @@ def render_test_card_executor():
 |---------|------------|------------|------------------|---------------------|--------------|----------|------|------|-------|
 | {test_id} | {edited_title} | {edited_procedures_text} | {edited_expected_results} | {edited_acceptance_criteria} | {edited_dependencies} | () | () | () | |"""
 
-                            update_payload["content"] = reconstructed_table
+                            updated_content = reconstructed_table
 
-                        update_response = requests.post(
-                            f"{config.fastapi_url}/api/doc_gen/test-cards/bulk-update",
-                            json={
-                                "collection_name": "test_cards",
-                                "updates": [{
-                                    "document_id": selected_card.get("document_id"),
-                                    "updates": update_payload
-                                }]
-                            },
-                            timeout=30
+                        _create_test_card_version(
+                            card=selected_card,
+                            updates=update_payload,
+                            updated_content=updated_content,
+                            plan_key=plan_key,
+                            plan_title=plan_title,
+                            plan_doc_id=selected_doc_id
                         )
 
-                        if update_response.status_code == 200:
-                            st.success("Test card updated successfully!")
-                            st.rerun()
-                        else:
-                            st.error(f"Update failed: {update_response.text}")
+                        st.success("Test card updated successfully!")
+                        st.rerun()
 
                     except Exception as e:
                         st.error(f"Failed to save changes: {str(e)}")

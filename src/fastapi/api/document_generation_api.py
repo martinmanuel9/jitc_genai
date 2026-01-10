@@ -101,7 +101,9 @@ async def generate_documents(
         req.source_collections,
         req.source_doc_ids,
         req.doc_title,
-        req.agent_set_id
+        req.agent_set_id,
+        req.sectioning_strategy,
+        req.chunks_per_section
     )
     return {"documents": docs}
 
@@ -161,7 +163,9 @@ async def generate_optimized_test_plan(
             req.source_collections,
             req.source_doc_ids,
             req.doc_title,
-            req.agent_set_id
+            req.agent_set_id,
+            req.sectioning_strategy,
+            req.chunks_per_section
         )
         return {"documents": docs}
     except Exception as e:
@@ -178,6 +182,8 @@ def _run_generation_background(
     source_doc_ids: List[str],
     doc_title: str,
     agent_set_id: int,
+    sectioning_strategy: Optional[str],
+    chunks_per_section: Optional[int],
     doc_service: DocumentService,
     pipeline_id: str
 ):
@@ -189,6 +195,7 @@ def _run_generation_background(
     """
     try:
         logger.info(f"Background generation started for: {doc_title} (pipeline: {pipeline_id})")
+        logger.info(f"Parameters: collections={source_collections}, doc_ids={source_doc_ids}, agent_set_id={agent_set_id}")
 
         # Run generation (this can take 20+ minutes)
         # Pass pipeline_id to service so it uses our pre-generated ID
@@ -197,8 +204,12 @@ def _run_generation_background(
             source_doc_ids,
             doc_title,
             agent_set_id,
+            sectioning_strategy,
+            chunks_per_section,
             pipeline_id
         )
+        
+        logger.info(f"Test plan generation completed, returned {len(docs) if docs else 0} documents")
 
         if docs and len(docs) > 0:
             doc = docs[0]
@@ -345,6 +356,8 @@ async def generate_documents_async(
         req.source_doc_ids,
         req.doc_title,
         req.agent_set_id,
+        req.sectioning_strategy,
+        req.chunks_per_section,
         doc_service,
         pipeline_id  # Pass to service so it doesn't create another one
     )
@@ -2328,6 +2341,7 @@ async def query_test_cards(req: QueryTestCardsRequest):
             filtered_cards.append({
                 "document_id": doc_id,
                 "document_name": metadata.get("document_name", ""),
+                "metadata": metadata,
                 "test_id": metadata.get("test_id", ""),
                 "test_plan_id": metadata.get("test_plan_id", ""),
                 "test_plan_title": metadata.get("test_plan_title", ""),
@@ -2336,8 +2350,11 @@ async def query_test_cards(req: QueryTestCardsRequest):
                 "requirement_text": metadata.get("requirement_text", ""),
                 "execution_status": metadata.get("execution_status", "not_executed"),
                 "executed_by": metadata.get("executed_by", ""),
+                "executed_at": metadata.get("executed_at", ""),
+                "execution_duration_minutes": metadata.get("execution_duration_minutes", 0),
                 "passed": metadata.get("passed", False),
                 "failed": metadata.get("failed", False),
+                "actual_results": metadata.get("actual_results", ""),
                 "notes": metadata.get("notes", ""),
                 "content_preview": content[:200] + "..." if len(content) > 200 else content,
                 "content": content  # Include full content for editing
@@ -2836,4 +2853,3 @@ async def bulk_update_test_cards(req: BulkUpdateTestCardsRequest):
         import traceback
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Bulk update failed: {str(e)}")
-

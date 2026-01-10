@@ -433,7 +433,9 @@ class MultiAgentTestPlanService:
                                      source_doc_ids: List[str],
                                      doc_title: str = "Test Plan",
                                      agent_set_id: int = None,
-                                     pipeline_id: str = None) -> FinalTestPlan:
+                                     pipeline_id: str = None,
+                                     sectioning_strategy: Optional[str] = None,
+                                     chunks_per_section: Optional[int] = None) -> FinalTestPlan:
         """
         Main entry point for multi-agent test plan generation
 
@@ -447,20 +449,26 @@ class MultiAgentTestPlanService:
             ValueError: If agent_set_id is None or invalid
         """
         logger.info("=== STARTING MULTI-AGENT TEST PLAN GENERATION ===")
+        logger.info(f"Parameters: collections={source_collections}, doc_ids={source_doc_ids}, title={doc_title}")
         start_time = time.time()
 
         # Validate agent_set_id is provided
         if agent_set_id is None:
+            logger.error("agent_set_id is None - cannot proceed with test plan generation")
             raise ValueError("agent_set_id is required. Please select an agent set from the Agent Set Manager.")
 
         # Use provided pipeline_id or generate unique one
         if pipeline_id is None:
             pipeline_id = f"pipeline_{uuid.uuid4().hex[:12]}"
+            logger.info(f"Generated new pipeline_id: {pipeline_id}")
+        else:
+            logger.info(f"Using provided pipeline_id: {pipeline_id}")
 
         # Load agent set configuration
         logger.info(f"Using agent set ID: {agent_set_id}")
         agent_set_config = self._load_agent_set_configuration(agent_set_id)
         if not agent_set_config:
+            logger.error(f"Failed to load agent set {agent_set_id}")
             raise ValueError(f"Failed to load agent set {agent_set_id}. Agent set may not exist or is invalid.")
 
         try:
@@ -468,11 +476,21 @@ class MultiAgentTestPlanService:
             self._maybe_fallback_to_llama(pipeline_id)
 
             # 1. Extract document sections from ChromaDB
-            sections = self._extract_document_sections(source_collections, source_doc_ids)
+            logger.info(f"Extracting sections from {len(source_collections)} collections with strategy={sectioning_strategy}")
+            sections = self._extract_document_sections(
+                source_collections,
+                source_doc_ids,
+                sectioning_strategy=sectioning_strategy,
+                chunks_per_section=chunks_per_section
+            )
             
+            logger.info(f"Extracted {len(sections)} sections from ChromaDB")
             if not sections:
-                logger.error("No sections extracted from ChromaDB")
+                logger.error("No sections extracted from ChromaDB - creating fallback plan")
                 return self._create_fallback_test_plan(doc_title, pipeline_id)
+            
+            # Log section keys for debugging
+            logger.info(f"Section keys: {list(sections.keys())[:5]}...")  # Show first 5 for debugging
             
             logger.info(f"Processing {len(sections)} sections with multi-agent pipeline")
             
@@ -536,18 +554,28 @@ class MultiAgentTestPlanService:
             
         except Exception as e:
             logger.error(f"Multi-agent test plan generation failed: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             self._cleanup_pipeline(pipeline_id)
             try:
                 self._update_pipeline_metadata(pipeline_id, {
                     "status": "FAILED",
-                    "error": str(e)
+                    "error": str(e),
+                    "error_traceback": traceback.format_exc()
                 })
                 self.redis_client.zrem("pipeline:processing", pipeline_id)
             except Exception:
                 pass
+            logger.warning(f"Generating fallback test plan after failure for {doc_title}")
             return self._create_fallback_test_plan(doc_title, pipeline_id)
     
-    def _extract_document_sections(self, source_collections: List[str], source_doc_ids: List[str]) -> Dict[str, str]:
+    def _extract_document_sections(
+        self,
+        source_collections: List[str],
+        source_doc_ids: List[str],
+        sectioning_strategy: Optional[str] = None,
+        chunks_per_section: Optional[int] = None
+    ) -> Dict[str, str]:
         """Extract sections from ChromaDB with robust reconstruction fallback.
 
         Strategy:
@@ -555,6 +583,14 @@ class MultiAgentTestPlanService:
         - Otherwise, group by metadata-based 'section_title' or page and combine chunks.
         """
         sections: Dict[str, str] = {}
+        strategy = (sectioning_strategy or "auto").lower()
+        group_size = max(int(chunks_per_section or 5), 1)
+
+        if strategy == "by_chunks":
+            return self._extract_sections_by_chunks(source_collections, source_doc_ids, group_size)
+
+        if strategy == "by_metadata":
+            return self._extract_sections_by_metadata(source_collections, source_doc_ids)
 
         # 1) Preferred path: reconstruct by provided document IDs
         if source_doc_ids:
@@ -583,6 +619,15 @@ class MultiAgentTestPlanService:
                 return sections
 
         # 2) Fallback path: metadata grouping from the collection
+        return self._extract_sections_by_metadata(source_collections, source_doc_ids)
+
+    def _extract_sections_by_metadata(
+        self,
+        source_collections: List[str],
+        source_doc_ids: List[str]
+    ) -> Dict[str, str]:
+        sections: Dict[str, str] = {}
+
         for collection_name in source_collections:
             try:
                 response = requests.get(
@@ -605,6 +650,7 @@ class MultiAgentTestPlanService:
                 # Group by document and section with improved metadata handling
                 document_sections: Dict[str, List[str]] = {}
                 for doc_id, doc, meta in zip(ids, docs, metas):
+                    meta = meta or {}
                     doc_name = (
                         (meta.get("document_name") or meta.get("filename") or meta.get("source"))
                         or doc_id
@@ -633,7 +679,78 @@ class MultiAgentTestPlanService:
             except Exception as e:
                 logger.error(f"Error processing collection {collection_name}: {e}")
 
-        logger.info(f"Extracted {len(sections)} sections for multi-agent processing (fallback path)")
+        logger.info(f"Extracted {len(sections)} sections for multi-agent processing (metadata path)")
+        return sections
+
+    def _extract_sections_by_chunks(
+        self,
+        source_collections: List[str],
+        source_doc_ids: List[str],
+        chunks_per_section: int
+    ) -> Dict[str, str]:
+        sections: Dict[str, str] = {}
+
+        for collection_name in source_collections:
+            try:
+                response = requests.get(
+                    f"{self.fastapi_url}/api/vectordb/documents",
+                    params={"collection_name": collection_name},
+                    timeout=120
+                )
+
+                if not response.ok:
+                    logger.error(f"Failed to fetch from collection {collection_name}")
+                    continue
+
+                data = response.json()
+                docs = data.get("documents", [])
+                metas = data.get("metadatas", [])
+                ids = data.get("ids", [])
+
+                logger.info(f"Collection {collection_name} has {len(docs)} documents")
+
+                grouped: Dict[str, Dict[str, object]] = {}
+                for doc_id, doc, meta in zip(ids, docs, metas):
+                    meta = meta or {}
+                    original_doc_id = meta.get("document_id") or doc_id
+                    doc_name = (
+                        (meta.get("document_name") or meta.get("filename") or meta.get("source"))
+                        or original_doc_id
+                    )
+
+                    if source_doc_ids:
+                        if original_doc_id not in source_doc_ids and not any(
+                            str(x) in str(doc_name) for x in source_doc_ids
+                        ):
+                            continue
+
+                    chunk_index = meta.get("chunk_index", 0)
+                    entry = grouped.setdefault(original_doc_id, {"name": doc_name, "chunks": []})
+                    entry["chunks"].append((chunk_index, doc))
+
+                for _, info in grouped.items():
+                    chunks = sorted(info["chunks"], key=lambda item: item[0])
+                    if not chunks:
+                        continue
+
+                    for idx in range(0, len(chunks), chunks_per_section):
+                        chunk_slice = chunks[idx:idx + chunks_per_section]
+                        combined_content = "\n\n".join(
+                            chunk for _, chunk in chunk_slice if chunk and chunk.strip()
+                        )
+                        if len(combined_content.strip()) <= 100:
+                            continue
+                        group_number = idx // chunks_per_section + 1
+                        section_key = f"{info['name']} - Chunk Group {group_number}"
+                        sections[section_key] = combined_content
+
+            except Exception as e:
+                logger.error(f"Error processing collection {collection_name}: {e}")
+
+        logger.info(
+            f"Extracted {len(sections)} sections for multi-agent processing "
+            f"(chunk grouping, size={chunks_per_section})"
+        )
         return sections
 
     def _clean_section_title(self, title: str) -> str:
@@ -1742,7 +1859,16 @@ Create a comprehensive markdown document that consolidates all {len(section_resu
         - Record fallback in Redis pipeline meta
         """
         try:
-            needs_openai = any(str(m).lower().startswith("gpt") for m in (self.actor_models + [self.critic_model, self.final_critic_model]))
+            def _is_openai_model(model_name: str) -> bool:
+                lowered = str(model_name).lower()
+                if lowered.startswith("gpt-oss"):
+                    return False
+                return lowered.startswith("gpt")
+
+            needs_openai = any(
+                _is_openai_model(m)
+                for m in (self.actor_models + [self.critic_model, self.final_critic_model])
+            )
             if not needs_openai:
                 return
 

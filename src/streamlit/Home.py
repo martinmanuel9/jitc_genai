@@ -1,20 +1,18 @@
 import streamlit as st
-import os
 import nest_asyncio
 import torch
 import logging
 
 from config.settings import config
-from config.env import env
 
 # Components - migrated to use new architecture internally
 from components.healthcheck_sidebar import Healthcheck_Sidebar
 from components.direct_chat import Direct_Chat
-from components.agent_sim import Agent_Sim
 from components.document_generator import Document_Generator
-from components.test_card_viewer import TestCardViewer
-from components.agent_manager import render_unified_agent_manager
-from components.session_history import Session_History
+from components.test_plan_editor import render_test_plan_editor
+from components.test_card_viewer import render_test_card_generator, render_test_card_executor
+from components.upload_documents import render_upload_component
+from services.chromadb_service import chromadb_service
 
 torch.classes.__path__ = []
 nest_asyncio.apply()
@@ -37,17 +35,13 @@ for logger_name in ['', 'streamlit', 'tornado.application']:
     logger.addFilter(WebSocketErrorFilter())
 
 # Use centralized config instead of duplicate endpoint definitions
-FASTAPI = config.endpoints.base
 CHROMADB_API = config.endpoints.vectordb
-CHAT_ENDPOINT = config.endpoints.chat
-HISTORY_ENDPOINT = config.endpoints.history
-HEALTH_ENDPOINT = config.endpoints.health
-OPEN_AI_API_KEY = env.openai_api_key
 
 # THIS MUST BE THE VERY FIRST STREAMLIT COMMAND
-st.set_page_config(page_title="AI Assistant", layout="wide", page_icon="🤖")
+st.set_page_config(page_title="Test Planning Workflow", layout="wide", page_icon="T")
 
-st.title("AI Assistant")
+st.title("Test Planning Workflow")
+st.caption("Upload standards, generate plans, edit sections, and build test cards.")
 
 # Initialize session state
 if 'health_status' not in st.session_state:
@@ -71,47 +65,48 @@ Healthcheck_Sidebar()
 # ----------------------------------------------------------------------
 # MAIN INTERFACE
 # ----------------------------------------------------------------------
-# Chat mode selection
-chat_mode = st.radio(
-    "Select Mode:",
-    ["Direct Chat", "AI Agent Simulation", "Agent & Orchestration Manager", "Document Generator", "Test Card Viewer"],
-    horizontal=True
-)
+workflow_tab, chat_tab = st.tabs(["Workflow", "Chat"])
 
-# ----------------------------------------------------------------------
-# DIRECT CHAT MODE
-# ----------------------------------------------------------------------
-if chat_mode == "Direct Chat":
-    st.markdown("---")
+
+with workflow_tab:
+    st.subheader("Workflow Steps")
+    step_upload, step_generate, step_edit_plan, step_cards, step_edit_cards = st.tabs([
+        "1. Upload Standards",
+        "2. Generate Test Plan",
+        "3. Edit Test Plan",
+        "4. Generate Test Cards",
+        "5. Edit Test Cards",
+    ])
+
+    with step_upload:
+        try:
+            st.session_state.collections = chromadb_service.get_collections()
+        except Exception:
+            st.session_state.collections = st.session_state.get("collections", [])
+
+        render_upload_component(
+            available_collections=st.session_state.collections,
+            load_collections_func=chromadb_service.get_collections,
+            create_collection_func=chromadb_service.create_collection,
+            upload_endpoint=f"{CHROMADB_API}/documents/upload-and-process",
+            job_status_endpoint=f"{CHROMADB_API}/jobs/{{job_id}}",
+            key_prefix="home_upload"
+        )
+
+    with step_generate:
+        Document_Generator(allow_stop=False)
+
+    with step_edit_plan:
+        render_test_plan_editor()
+
+    with step_cards:
+        render_test_card_generator()
+
+    with step_edit_cards:
+        render_test_card_executor()
+
+with chat_tab:
     Direct_Chat()
-
-# ----------------------------------------------------------------------
-# AI AGENT SIMULATION MODE
-# ----------------------------------------------------------------------
-elif chat_mode == "AI Agent Simulation":
-    st.markdown("---")
-    Agent_Sim()
-
-# ----------------------------------------------------------------------
-# UNIFIED AGENT & ORCHESTRATION MANAGER MODE
-# ----------------------------------------------------------------------
-elif chat_mode == "Agent & Orchestration Manager":
-    st.markdown("---")
-    render_unified_agent_manager()
-
-# ----------------------------------------------------------------------
-# DOCUMENT GENERATOR MODE
-# ----------------------------------------------------------------------
-elif chat_mode == "Document Generator":
-    st.markdown("---")
-    Document_Generator()
-
-# ----------------------------------------------------------------------
-# TEST CARD VIEWER MODE (Phase 3)
-# ----------------------------------------------------------------------
-elif chat_mode == "Test Card Viewer":
-    st.markdown("---")
-    TestCardViewer()
 
 # ----------------------------------------------------------------------
 # SESSION HISTORY & ANALYTICS MODE
@@ -123,4 +118,4 @@ elif chat_mode == "Test Card Viewer":
 
 # Footer
 st.markdown("---")
-st.caption("This application processes documents and provide GenAI capabilitites. Ensure all data is handled according to your organization's data protection policies.")
+st.caption("This application processes documents and provides GenAI capabilities. Ensure all data is handled according to your organization's data protection policies.")

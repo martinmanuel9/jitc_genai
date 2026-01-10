@@ -10,7 +10,7 @@ CHROMADB_API = config.endpoints.vectordb
 
 def document_based_debate(agents, agent_choices, collections):
     st.subheader("Document-Based Agent Debate")
-    st.info("Select a specific document from your collections for agents to debate about. This uses RAG to pull content from your uploaded documents and allows multiple agents to analyze the same content with different perspectives.")
+    st.info("Select a specific document from your folders for agents to debate about. This uses RAG to pull content from your uploaded documents and allows multiple agents to analyze the same content with different perspectives.")
     
     # === CONTENT INPUT SELECTION ===
     st.write("**Step 1: Choose Document Input Method**")
@@ -52,16 +52,16 @@ def document_based_debate(agents, agent_choices, collections):
                 key="doc_debate_upload_prompt"
             )
             
-            # Collection selection for uploaded document
+            # Folder selection for uploaded document
             if collections:
                 collection_for_debate = st.selectbox(
-                    "Select Collection (where document was uploaded):",
+                    "Select Folder (where document was uploaded):",
                     collections,
                     key="doc_debate_upload_collection",
-                    help="Choose the collection where you uploaded your document"
+                    help="Choose the folder where you uploaded your document"
                 )
             else:
-                st.warning("No collections available. Upload a document first.")
+                st.warning("No folders available. Upload a document first.")
     
     # USE EXISTING DOCUMENT
     elif input_method == "Use Existing Document":
@@ -109,7 +109,7 @@ def document_based_debate(agents, agent_choices, collections):
         if not debate_content:
             st.warning("Please enter a debate topic/prompt.")
         elif not collection_for_debate:
-            st.warning("Please select a collection.")
+            st.warning("Please select a folder.")
         elif not doc_selected_agents:
             st.warning("Please select at least one agent.")
         else:
@@ -118,7 +118,7 @@ def document_based_debate(agents, agent_choices, collections):
             # Show debate setup
             with st.expander("Document Debate Setup", expanded=True):
                 st.write(f"**Debate Prompt**: {debate_content[:100]}{'...' if len(debate_content) > 100 else ''}")
-                st.write(f"**Collection**: {collection_for_debate}")
+                st.write(f"**Folder**: {collection_for_debate}")
                 st.write(f"**Agents**: {len(doc_agent_ids)} selected")
                 st.write(f"**Input Method**: {input_method}")
                 for i, agent_name in enumerate(doc_selected_agents, 1):
@@ -186,12 +186,12 @@ def document_based_debate(agents, agent_choices, collections):
         
         **Upload Document:**
         - Upload new documents (PDF, DOCX, TXT, etc.) for analysis
-        - Documents are processed and stored in ChromaDB collections
+        - Documents are processed and stored in ChromaDB folders
         - Best for: New documents that need fresh multi-perspective analysis
         
         **Use Existing Document:**
-        - Select from previously uploaded documents in your collections
-        - Browse collections and choose specific documents
+        - Select from previously uploaded documents in your folders
+        - Browse folders and choose specific documents
         - Best for: Getting new perspectives on existing documents
         
         **Step 2: Agent Selection**

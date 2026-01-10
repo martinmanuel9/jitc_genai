@@ -217,7 +217,7 @@ def render_recent_sessions_tab(days: int):
                     completed = session.get('completed_at', 'Not completed')
                     st.write(f"**Completed:** {completed}")
                     collection = session.get('collection_name', 'N/A')
-                    st.write(f"**Collection:** {collection}")
+                    st.write(f"**Folder:** {collection}")
 
                 # Query and results
                 st.markdown("**User Query:**")
@@ -416,7 +416,7 @@ def render_rag_effectiveness_tab(days: int):
                 rag_data.append({
                     "Query": session.get('user_query', 'N/A')[:60] + "...",
                     "Type": session.get('session_type', 'N/A').replace('_', ' ').title(),
-                    "Collection": session.get('collection_name', 'N/A'),
+                    "Folder": session.get('collection_name', 'N/A'),
                     "Time (s)": f"{session.get('total_response_time_ms', 0)/1000:.2f}",
                     "Status": session.get('status', 'N/A')
                 })

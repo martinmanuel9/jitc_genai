@@ -451,6 +451,10 @@ async def upload_and_process_documents(
 
     # 4) Kick off the background task
     selected_models = [m.strip() for m in vision_models.split(",") if m.strip()]
+    allowed_models = {"llava_7b", "llava_13b"}
+    selected_models = [m for m in selected_models if m in allowed_models]
+    if not selected_models:
+        selected_models = ["llava_7b"]
     background_tasks.add_task(
         run_ingest_job,
         job_id,

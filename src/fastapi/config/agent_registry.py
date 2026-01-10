@@ -274,7 +274,7 @@ class AgentRegistry:
                 self.contradiction_agent_db = self._agent_to_dict(contradiction_agents[0])
                 self.contradiction_model = self.contradiction_agent_db['model_name']
             else:
-                self.contradiction_model = "gpt-4"
+                self.contradiction_model = "gpt-oss:latest"
 
             # Load gap analysis agent (single)
             gap_agents = repo.get_by_type('gap_analysis', session)
@@ -282,7 +282,7 @@ class AgentRegistry:
                 self.gap_analysis_agent_db = self._agent_to_dict(gap_agents[0])
                 self.gap_analysis_model = self.gap_analysis_agent_db['model_name']
             else:
-                self.gap_analysis_model = "gpt-4"
+                self.gap_analysis_model = "gpt-oss:latest"
 
             # Final critic is same as critic for now (can be customized later)
             self.final_critic_model = self.critic_model
@@ -305,21 +305,21 @@ class AgentRegistry:
             count = int(os.getenv("ACTOR_AGENT_COUNT", "3"))
         except ValueError:
             count = 3
-        base_model = os.getenv("ACTOR_BASE_MODEL", "gpt-4")
+        base_model = os.getenv("ACTOR_BASE_MODEL", "gpt-oss:latest")
 
         # Validate base model
         is_valid, error = validate_model(base_model)
         if not is_valid:
-            logger.warning(f"Invalid ACTOR_BASE_MODEL '{base_model}': {error}. Using gpt-4.")
-            base_model = "gpt-4"
+            logger.warning(f"Invalid ACTOR_BASE_MODEL '{base_model}': {error}. Using gpt-oss:latest.")
+            base_model = "gpt-oss:latest"
 
         self.actor_models = [base_model for _ in range(max(1, count))]
 
         # Critic models
         self.critic_model = self._validate_and_get_model(
-            os.getenv("CRITIC_MODEL", "gpt-4"),
+            os.getenv("CRITIC_MODEL", "gpt-oss:latest"),
             "CRITIC_MODEL",
-            "gpt-4"
+            "gpt-oss:latest"
         )
         self.final_critic_model = self._validate_and_get_model(
             os.getenv("FINAL_CRITIC_MODEL", self.critic_model),
@@ -329,17 +329,17 @@ class AgentRegistry:
 
         # Contradiction detection
         self.contradiction_model = self._validate_and_get_model(
-            os.getenv("CONTRADICTION_AGENT_MODEL", "gpt-4"),
+            os.getenv("CONTRADICTION_AGENT_MODEL", "gpt-oss:latest"),
             "CONTRADICTION_AGENT_MODEL",
-            "gpt-4"
+            "gpt-oss:latest"
         )
         self.enable_contradiction = os.getenv("ENABLE_CONTRADICTION_DETECTION", "true").lower() == "true"
 
         # Gap analysis
         self.gap_analysis_model = self._validate_and_get_model(
-            os.getenv("GAP_ANALYSIS_MODEL", "gpt-4"),
+            os.getenv("GAP_ANALYSIS_MODEL", "gpt-oss:latest"),
             "GAP_ANALYSIS_MODEL",
-            "gpt-4"
+            "gpt-oss:latest"
         )
         self.enable_gap_analysis = os.getenv("ENABLE_GAP_ANALYSIS", "true").lower() == "true"
 
@@ -490,7 +490,7 @@ class AgentRegistry:
         # Use environment-configured model if not specified
         if model_name is None:
             if agent_type == AgentType.ACTOR:
-                model_name = self.actor_models[0] if self.actor_models else "gpt-4"
+                model_name = self.actor_models[0] if self.actor_models else "gpt-oss:latest"
             elif agent_type == AgentType.CRITIC:
                 model_name = self.critic_model
             elif agent_type == AgentType.CONTRADICTION:
@@ -500,7 +500,7 @@ class AgentRegistry:
             elif agent_type == AgentType.FINAL_CRITIC:
                 model_name = self.final_critic_model
             else:
-                model_name = "gpt-4"
+                model_name = "gpt-oss:latest"
 
         return AgentConfig(
             agent_type=agent_type,

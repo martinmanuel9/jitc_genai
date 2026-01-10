@@ -60,7 +60,7 @@ class EnhancedImageProcessingPipeline:
     def __init__(
         self,
         image_output_dir: str = "extracted_images",
-        llm_model: str = "gpt-4o",
+        llm_model: str = "llava:7b",
         max_extraction_workers: int = 1,  # Sequential for PyMuPDF (not thread-safe)
         max_description_workers: int = 4,  # Parallel for API calls
         enable_visual_probing: bool = True,
@@ -72,12 +72,12 @@ class EnhancedImageProcessingPipeline:
 
         Args:
             image_output_dir: Directory for extracted images
-            llm_model: Multimodal model for descriptions
+            llm_model: Multimodal model for descriptions (LLaVA via Ollama)
             max_extraction_workers: Extraction parallelism (keep at 1 for PyMuPDF)
             max_description_workers: Description parallelism
             enable_visual_probing: Enable pixel-level content detection
             enable_drawing_detection: Enable vector drawing detection
-            api_key: OpenAI API key (uses env var if not provided)
+            api_key: Deprecated; retained for compatibility
         """
         logger.info("Initializing EnhancedImageProcessingPipeline")
 

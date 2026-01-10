@@ -97,12 +97,12 @@ INSERT INTO compliance_agents (
     agent_metadata, created_at, updated_at
 ) VALUES
 -- Diverse Actor Agents (matching mil_test_plan_gen.ipynb)
--- Actor Agent 1: GPT-4o
+-- Actor Agent 1: GPT-OSS (A)
 (
-    'Actor Agent - GPT-4o',
+    'Actor Agent - GPT-OSS (A)',
     'actor',
     'test_plan_generation',
-    'gpt-4o',
+    'gpt-oss:latest',
     'You are a compliance and test planning expert specializing in military and technical standards.
 
 Your role is to meticulously analyze technical specifications and extract testable requirements with exceptional detail and precision.',
@@ -168,18 +168,18 @@ IMPORTANT:
     TRUE,
     TRUE,
     'system',
-    'Fast multimodal actor for requirement extraction using GPT-4o',
-    '{"model_variant": "gpt-4o", "purpose": "fast_analysis"}',
+    'Local GPT-OSS actor for requirement extraction (A)',
+    '{"model_variant": "gpt-oss:latest", "purpose": "fast_analysis"}',
     CURRENT_TIMESTAMP,
     CURRENT_TIMESTAMP
 ),
 
--- Actor Agent 2: GPT-4 Turbo
+-- Actor Agent 2: GPT-OSS (B)
 (
-    'Actor Agent - GPT-4 Turbo',
+    'Actor Agent - GPT-OSS (B)',
     'actor',
     'test_plan_generation',
-    'gpt-4-turbo',
+    'gpt-oss:latest',
     'You are a compliance and test planning expert specializing in military and technical standards.
 
 Your role is to meticulously analyze technical specifications and extract testable requirements with exceptional detail and precision.',
@@ -245,18 +245,18 @@ IMPORTANT:
     TRUE,
     TRUE,
     'system',
-    'Balanced actor for requirement extraction using GPT-4 Turbo',
-    '{"model_variant": "gpt-4-turbo", "purpose": "balanced_analysis"}',
+    'Balanced local GPT-OSS actor for requirement extraction (B)',
+    '{"model_variant": "gpt-oss:latest", "purpose": "balanced_analysis"}',
     CURRENT_TIMESTAMP,
     CURRENT_TIMESTAMP
 ),
 
--- Actor Agent 3: GPT-4
+-- Actor Agent 3: GPT-OSS (C)
 (
-    'Actor Agent - GPT-4',
+    'Actor Agent - GPT-OSS (C)',
     'actor',
     'test_plan_generation',
-    'gpt-4',
+    'gpt-oss:latest',
     'You are a compliance and test planning expert specializing in military and technical standards.
 
 Your role is to meticulously analyze technical specifications and extract testable requirements with exceptional detail and precision.',
@@ -322,8 +322,8 @@ IMPORTANT:
     TRUE,
     TRUE,
     'system',
-    'High-quality thorough actor for requirement extraction using GPT-4',
-    '{"model_variant": "gpt-4", "purpose": "thorough_analysis"}',
+    'High-quality thorough GPT-OSS actor for requirement extraction (C)',
+    '{"model_variant": "gpt-oss:latest", "purpose": "thorough_analysis"}',
     CURRENT_TIMESTAMP,
     CURRENT_TIMESTAMP
 ),
@@ -333,7 +333,7 @@ IMPORTANT:
     'Actor Agent (Default)',
     'actor',
     'test_plan_generation',
-    'gpt-4-turbo',
+    'gpt-oss:latest',
     'You are a compliance and test planning expert specializing in military and technical standards.
 
 Your role is to meticulously analyze technical specifications and extract testable requirements with exceptional detail and precision.',
@@ -410,7 +410,7 @@ IMPORTANT:
     'Critic Agent (Default)',
     'critic',
     'test_plan_generation',
-    'gpt-4-turbo',
+    'gpt-oss:latest',
     'You are a senior test planning reviewer with expertise in synthesizing multiple perspectives into cohesive test plans.
 
 Your role is to critically analyze multiple requirement extractions and create a single, authoritative test plan that:
@@ -498,7 +498,7 @@ TASK: Synthesize these actor outputs into ONE authoritative test plan. Preserve 
     'Contradiction Detection Agent (Default)',
     'contradiction',
     'test_plan_generation',
-    'gpt-4-turbo',
+    'gpt-oss:latest',
     'You are a Contradiction Detection Agent specialized in identifying conflicts and inconsistencies in test procedures.
 
 Your role is to detect:
@@ -543,7 +543,7 @@ IDENTIFY AND REPORT:
     'Gap Analysis Agent (Default)',
     'gap_analysis',
     'test_plan_generation',
-    'gpt-4-turbo',
+    'gpt-oss:latest',
     'You are a Gap Analysis Agent specialized in identifying missing requirements and test coverage gaps.
 
 Your role is to ensure:
@@ -594,7 +594,7 @@ INSERT INTO compliance_agents (
     'Compliance Checker (Document Analysis)',
     'compliance',
     'document_analysis',
-    'gpt-4-turbo',
+    'gpt-oss:latest',
     'You are a compliance verification expert specializing in analyzing technical documents, standards, and requirements.
 
 Your role is to carefully evaluate whether the provided content meets specified requirements, identify compliance issues, and provide detailed analysis.',
@@ -641,7 +641,7 @@ Provide a thorough evaluation of the content, including:
     'Requirements Extractor (Document Analysis)',
     'custom',
     'document_analysis',
-    'gpt-4-turbo',
+    'gpt-oss:latest',
     'You are an expert at extracting and analyzing requirements from technical documents, specifications, and standards.
 
 Your role is to identify explicit and implicit requirements, categorize them, and present them in a structured format.',
@@ -695,7 +695,7 @@ Provide your analysis in the following format:
     'Technical Reviewer (Document Analysis)',
     'custom',
     'document_analysis',
-    'gpt-4',
+    'gpt-oss:latest',
     'You are a senior technical reviewer with expertise in evaluating technical documentation, code, architectures, and engineering designs.
 
 Your role is to provide thorough, constructive technical reviews focusing on correctness, completeness, quality, and best practices.',
@@ -751,7 +751,7 @@ Provide a 2-3 sentence overview of the content and your assessment.
     'General Document Analyzer (Document Analysis)',
     'custom',
     'document_analysis',
-    'gpt-4o',
+    'gpt-oss:latest',
     'You are a versatile document analysis expert capable of analyzing any type of technical or business content.
 
 Your role is to provide clear, structured analysis that helps users understand and work with the provided content.',
@@ -812,7 +812,7 @@ INSERT INTO agent_sets (
 -- Standard Test Plan Pipeline (Original Notebook Configuration)
 (
     'Standard Test Plan Pipeline',
-    '3 diverse GPT-4 actors + critic. Fast and proven approach from mil_test_plan_gen.ipynb.',
+    '3 GPT-OSS actors + critic. Fast and proven approach from mil_test_plan_gen.ipynb.',
     'sequence',
     '{
       "stages": [
@@ -820,7 +820,7 @@ INSERT INTO agent_sets (
           "stage_name": "actor",
           "agent_ids": [1, 2, 3],
           "execution_mode": "parallel",
-          "description": "Three diverse GPT-4 actors analyze sections in parallel for varied perspectives"
+          "description": "Three GPT-OSS actors analyze sections in parallel for varied perspectives"
         },
         {
           "stage_name": "critic",
@@ -936,6 +936,110 @@ INSERT INTO agent_sets (
     CURRENT_TIMESTAMP,
     'system'
 );
+
+-- ============================================================================
+-- USERS, VERSIONING, AND CALENDAR TABLES
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    email VARCHAR UNIQUE NOT NULL,
+    org VARCHAR,
+    role VARCHAR,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
+CREATE TABLE IF NOT EXISTS test_plans (
+    id SERIAL PRIMARY KEY,
+    plan_key VARCHAR UNIQUE NOT NULL,
+    title VARCHAR,
+    collection_name VARCHAR,
+    percent_complete FLOAT DEFAULT 0 CHECK (percent_complete >= 0 AND percent_complete <= 100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_test_plans_plan_key ON test_plans(plan_key);
+
+CREATE TABLE IF NOT EXISTS test_plan_versions (
+    id SERIAL PRIMARY KEY,
+    plan_id INTEGER NOT NULL REFERENCES test_plans(id) ON DELETE CASCADE,
+    version_number INTEGER NOT NULL,
+    document_id VARCHAR NOT NULL,
+    based_on_version_id INTEGER REFERENCES test_plan_versions(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (plan_id, version_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_test_plan_versions_plan_id ON test_plan_versions(plan_id);
+CREATE INDEX IF NOT EXISTS idx_test_plan_versions_version ON test_plan_versions(version_number);
+
+CREATE TABLE IF NOT EXISTS test_cards (
+    id SERIAL PRIMARY KEY,
+    card_key VARCHAR UNIQUE NOT NULL,
+    plan_id INTEGER REFERENCES test_plans(id) ON DELETE SET NULL,
+    title VARCHAR,
+    requirement_id VARCHAR,
+    percent_complete FLOAT DEFAULT 0 CHECK (percent_complete >= 0 AND percent_complete <= 100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_test_cards_card_key ON test_cards(card_key);
+CREATE INDEX IF NOT EXISTS idx_test_cards_plan_id ON test_cards(plan_id);
+
+CREATE TABLE IF NOT EXISTS test_card_versions (
+    id SERIAL PRIMARY KEY,
+    card_id INTEGER NOT NULL REFERENCES test_cards(id) ON DELETE CASCADE,
+    version_number INTEGER NOT NULL,
+    document_id VARCHAR NOT NULL,
+    plan_version_id INTEGER REFERENCES test_plan_versions(id) ON DELETE SET NULL,
+    based_on_version_id INTEGER REFERENCES test_card_versions(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (card_id, version_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_test_card_versions_card_id ON test_card_versions(card_id);
+CREATE INDEX IF NOT EXISTS idx_test_card_versions_version ON test_card_versions(version_number);
+
+CREATE TABLE IF NOT EXISTS document_versions (
+    id SERIAL PRIMARY KEY,
+    document_key VARCHAR NOT NULL,
+    document_id VARCHAR NOT NULL,
+    collection_name VARCHAR NOT NULL,
+    document_name VARCHAR,
+    version_number INTEGER NOT NULL,
+    based_on_version_id INTEGER REFERENCES document_versions(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (document_key, version_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_versions_key ON document_versions(document_key);
+
+CREATE TABLE IF NOT EXISTS calendar_events (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR NOT NULL,
+    description TEXT,
+    start_at TIMESTAMP NOT NULL,
+    end_at TIMESTAMP,
+    timezone VARCHAR,
+    owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    test_plan_id INTEGER REFERENCES test_plans(id) ON DELETE SET NULL,
+    test_card_id INTEGER REFERENCES test_cards(id) ON DELETE SET NULL,
+    recurrence_frequency VARCHAR,
+    recurrence_interval INTEGER DEFAULT 1,
+    recurrence_end_date DATE,
+    percent_complete FLOAT DEFAULT 0 CHECK (percent_complete >= 0 AND percent_complete <= 100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_events_owner ON calendar_events(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_calendar_events_start_at ON calendar_events(start_at);
 
 -- ============================================================================
 -- VERIFICATION

@@ -22,6 +22,15 @@ from models.sequence import ComplianceSequence
 from models.session import AgentSession, DebateSession
 from models.response import AgentResponse, ComplianceResult
 from models.citation import RAGCitation
+from models.user import User
+from models.calendar import CalendarEvent
+from models.versioning import (
+    TestPlan,
+    TestPlanVersion,
+    TestCard,
+    TestCardVersion,
+    DocumentVersion,
+)
 
 # Configure relationships (bidirectional relationships must be configured after all models are imported)
 from sqlalchemy.orm import relationship
@@ -64,4 +73,11 @@ __all__ = [
     "AgentResponse",
     "ComplianceResult",
     "RAGCitation",
+    "User",
+    "CalendarEvent",
+    "TestPlan",
+    "TestPlanVersion",
+    "TestCard",
+    "TestCardVersion",
+    "DocumentVersion",
 ]
