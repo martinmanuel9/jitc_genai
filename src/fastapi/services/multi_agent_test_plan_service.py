@@ -658,9 +658,10 @@ class MultiAgentTestPlanService:
                 document_sections: Dict[str, List[str]] = {}
                 for doc_id, doc, meta in zip(ids, docs, metas):
                     meta = meta or {}
+                    original_doc_id = meta.get("document_id") or doc_id
                     doc_name = (
                         (meta.get("document_name") or meta.get("filename") or meta.get("source"))
-                        or doc_id
+                        or original_doc_id
                     )
 
                     section_title = (
@@ -670,7 +671,9 @@ class MultiAgentTestPlanService:
 
                     # Filter by explicit IDs if specified
                     if source_doc_ids:
-                        if doc_id not in source_doc_ids and not any(str(x) in str(doc_name) for x in source_doc_ids):
+                        if original_doc_id not in source_doc_ids and not any(
+                            str(x) in str(doc_name) for x in source_doc_ids
+                        ):
                             continue
 
                     key = f"{doc_name} - {section_title}"

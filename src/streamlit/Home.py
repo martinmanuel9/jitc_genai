@@ -8,9 +8,7 @@ from config.settings import config
 # Components - migrated to use new architecture internally
 from components.healthcheck_sidebar import Healthcheck_Sidebar
 from components.direct_chat import Direct_Chat
-from components.document_generator import Document_Generator
-from components.test_plan_editor import render_test_plan_editor
-from components.test_card_viewer import render_test_card_generator, render_test_card_executor
+from components.json_test_plan_generator import JSON_Test_Plan_Generator
 from components.upload_documents import render_upload_component
 from services.chromadb_service import chromadb_service
 
@@ -70,12 +68,9 @@ workflow_tab, chat_tab = st.tabs(["Workflow", "Chat"])
 
 with workflow_tab:
     st.subheader("Workflow Steps")
-    step_upload, step_generate, step_edit_plan, step_cards, step_edit_cards = st.tabs([
+    step_upload, step_generate = st.tabs([
         "1. Upload Standards",
-        "2. Generate Test Plan",
-        "3. Edit Test Plan",
-        "4. Generate Test Cards",
-        "5. Edit Test Cards",
+        "2. Generate Test Plan (JSON)",
     ])
 
     with step_upload:
@@ -94,16 +89,7 @@ with workflow_tab:
         )
 
     with step_generate:
-        Document_Generator(allow_stop=False)
-
-    with step_edit_plan:
-        render_test_plan_editor()
-
-    with step_cards:
-        render_test_card_generator()
-
-    with step_edit_cards:
-        render_test_card_executor()
+        JSON_Test_Plan_Generator()
 
 with chat_tab:
     Direct_Chat()

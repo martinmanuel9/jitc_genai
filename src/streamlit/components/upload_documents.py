@@ -433,12 +433,17 @@ def render_upload_component(
 
         # Vision model selection
         st.subheader("Vision Models")
-        st.caption("LLaVA Vision Models (Local)")
+        st.caption("Local vision models for image description during ingestion")
         llava_7b_v = st.checkbox("LLaVA 1.6 7B", value=True, key=pref("llava_7b_vision"))
         llava_13b_v = st.checkbox("LLaVA 1.6 13B", value=False, key=pref("llava_13b_vision"))
+        granite_vision_v = st.checkbox("Granite 3.2 Vision 2B", value=False, key=pref("granite_vision_2b"))
         vision_models = []
-        if llava_7b_v: vision_models.append("llava_7b")
-        if llava_13b_v: vision_models.append("llava_13b")
+        if llava_7b_v:
+            vision_models.append("llava_7b")
+        if llava_13b_v:
+            vision_models.append("llava_13b")
+        if granite_vision_v:
+            vision_models.append("granite_vision_2b")
         if not vision_models:
             vision_models = ["llava_7b"]
 
@@ -446,6 +451,11 @@ def render_upload_component(
         st.subheader("Chunk Settings")
         chunk_size = st.number_input("Chunk Size", min_value=500, max_value=5000, value=1000, key=pref("chunk_size"))
         chunk_overlap = st.number_input("Chunk Overlap", min_value=0, max_value=chunk_size//2, value=200, key=pref("chunk_overlap"))
+        enable_ocr = st.checkbox(
+            "Enable OCR (scanned PDFs)",
+            value=False,
+            key=pref("enable_ocr")
+        )
 
         if st.button("Upload and Process", key=pref("upload_button")):
             if not target_collection:
@@ -466,6 +476,7 @@ def render_upload_component(
                         "store_images": True,
                         "model_name": "enhanced",
                         "vision_models": ",".join(vision_models),
+                        "enable_ocr": enable_ocr,
                     }
 
                     try:

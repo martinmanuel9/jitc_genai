@@ -53,6 +53,8 @@ class JSONTestPlanResponse(BaseModel):
     message: str = ""
     error: Optional[str] = None
     processing_status: str = "COMPLETED"
+    docx_b64: Optional[str] = None
+    saved_document_id: Optional[str] = None
 
 
 class JSONTestPlanListResponse(BaseModel):
@@ -226,12 +228,57 @@ async def generate_json_test_plan(
         
         # Validate JSON structure
         is_valid, validation_msg = JSONTestPlanService.validate_json_test_plan(json_test_plan)
-        
+
+        if not is_valid:
+            raise ValueError(f"Invalid test plan JSON: {validation_msg}")
+
+        saved_document_id = None
+        try:
+            collection_name = "json_test_plans"
+            fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:9020").rstrip("/")
+            list_resp = requests.get(f"{fastapi_url}/api/vectordb/collections", timeout=10)
+            list_resp.raise_for_status()
+            collections = list_resp.json().get("collections", [])
+            if collection_name not in collections:
+                create_resp = requests.post(
+                    f"{fastapi_url}/api/vectordb/collection/create",
+                    params={"collection_name": collection_name},
+                    timeout=10
+                )
+                create_resp.raise_for_status()
+
+            saved_document_id = f"json_test_plan_{uuid.uuid4().hex[:12]}"
+            metadata = json_test_plan.get("test_plan", {}).get("metadata", {})
+            save_payload = {
+                "collection_name": collection_name,
+                "documents": [json.dumps(json_test_plan)],
+                "ids": [saved_document_id],
+                "metadatas": [{
+                    "title": metadata.get("title", req.doc_title),
+                    "pipeline_id": metadata.get("pipeline_id", ""),
+                    "generated_at": metadata.get("generated_at", datetime.now().isoformat()),
+                    "agent_set_id": req.agent_set_id,
+                    "source_collections": json.dumps(req.source_collections or []),
+                    "source_doc_ids": json.dumps(req.source_doc_ids or []),
+                    "processing_status": metadata.get("processing_status", "COMPLETED")
+                }]
+            }
+            add_resp = requests.post(
+                f"{fastapi_url}/api/vectordb/documents/add",
+                json=save_payload,
+                timeout=10
+            )
+            add_resp.raise_for_status()
+        except Exception as save_error:
+            logger.warning(f"Failed to save JSON test plan to collection: {save_error}")
+
         return JSONTestPlanResponse(
             success=True,
             test_plan=json_test_plan,
             message=f"Successfully generated JSON test plan with {len(json_test_plan.get('test_plan', {}).get('sections', []))} sections",
-            processing_status="COMPLETED"
+            processing_status="COMPLETED",
+            docx_b64=doc.get("docx_b64"),
+            saved_document_id=saved_document_id
         )
     
     except Exception as e:
