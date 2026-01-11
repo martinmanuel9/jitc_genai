@@ -197,6 +197,14 @@ MODEL_REGISTRY: Dict[str, ModelConfig] = {
         provider="ollama",
         max_context_tokens=128000,
     ),
+    "snowflake-arctic-embed:latest": ModelConfig(
+        model_id="snowflake-arctic-embed:latest",
+        display_name="Snowflake Arctic Embed (Local)",
+        description="High-quality embedding model optimized for retrieval tasks (2.5GB disk)",
+        provider="ollama",
+        max_context_tokens=128000,
+    ),
+    
 }
 
 

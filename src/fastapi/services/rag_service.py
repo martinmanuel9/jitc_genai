@@ -43,10 +43,11 @@ class RAGService:
         self._max_retries = max_retries
         self._retry_delay = retry_delay
 
-        # Embedding function using Ollama (snowflake-arctic-embed-m)
+        # Embedding function using Ollama (Snowflake Arctic Embed - local model)
         ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+        ollama_embedding_model = os.getenv("OLLAMA_EMBEDDING_MODEL", "snowflake-arctic-embed:latest")
         self.embedding_function = OllamaEmbeddings(
-            model="snowflake-arctic-embed-m",
+            model=ollama_embedding_model,
             base_url=ollama_url
         )
 

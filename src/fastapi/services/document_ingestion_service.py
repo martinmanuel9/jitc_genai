@@ -7,6 +7,7 @@ Handles document processing, chunking, and embedding generation
 import os
 import chromadb
 from sentence_transformers import SentenceTransformer
+from langchain_ollama import OllamaEmbeddings
 from typing import List, Dict, Any, Optional
 import redis
 import json
@@ -50,10 +51,11 @@ VISION_CONFIG = {
             "huggingface_enabled": False,
             "enhanced_local_enabled": True,
             "ollama_url": os.getenv("OLLAMA_URL", "http://ollama:11434"),
-            "ollama_model": os.getenv("OLLAMA_VISION_MODEL", "llava:7b"),
+            "ollama_model": os.getenv("OLLAMA_VISION_MODEL", "granite3.2-vision:2b"),
             "huggingface_model": os.getenv("HUGGINGFACE_VISION_MODEL", "Salesforce/blip-image-captioning-base"),
-            # Ollama vision model mappings (LLaVA only)
+            # Ollama vision model mappings (includes Granite Vision and LLaVA)
             "ollama_models": {
+                "granite_vision_2b": "granite3.2-vision:2b",
                 "llava_7b": "llava:7b",
                 "llava_13b": "llava:13b"
             }
@@ -107,12 +109,95 @@ class LazyChromaClient:
 
 chroma_client = LazyChromaClient()
 
-# Embedding model (single instance)
+# =============================================================================
+# Embedding Model with Fallback Support
+# =============================================================================
+
+class HybridEmbeddingModel:
+    """
+    Embedding model with fallback support.
+    Primary: HuggingFace SentenceTransformer (works offline if cached)
+    Fallback: Ollama Snowflake Arctic Embed (fully local)
+    """
+
+    def __init__(self):
+        self._hf_model = None
+        self._ollama_model = None
+        self._use_ollama_fallback = False
+
+        # Configuration
+        self.hf_model_name = os.getenv(
+            "EMBEDDING_MODEL",
+            "sentence-transformers/multi-qa-mpnet-base-dot-v1"
+        )
+        self.ollama_url = os.getenv("OLLAMA_URL", "http://ollama:11434")
+        self.ollama_model_name = os.getenv(
+            "OLLAMA_EMBEDDING_MODEL",
+            "snowflake-arctic-embed:latest"
+        )
+
+        # Try to initialize HuggingFace model
+        self._init_hf_model()
+
+    def _init_hf_model(self):
+        """Try to initialize HuggingFace SentenceTransformer model."""
+        try:
+            logger.info(f"Initializing HuggingFace embedding model: {self.hf_model_name}")
+            self._hf_model = SentenceTransformer(self.hf_model_name)
+            logger.info("HuggingFace embedding model initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize HuggingFace model: {e}")
+            logger.info("Will use Ollama Snowflake Arctic Embed as fallback")
+            self._init_ollama_fallback()
+
+    def _init_ollama_fallback(self):
+        """Initialize Ollama embeddings as fallback."""
+        try:
+            logger.info(f"Initializing Ollama embedding model: {self.ollama_model_name}")
+            self._ollama_model = OllamaEmbeddings(
+                model=self.ollama_model_name,
+                base_url=self.ollama_url
+            )
+            self._use_ollama_fallback = True
+            logger.info("Ollama embedding model initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Ollama fallback model: {e}")
+            raise RuntimeError("No embedding model available - both HuggingFace and Ollama failed")
+
+    def encode(self, texts: List[str], convert_to_numpy: bool = True, batch_size: int = 32):
+        """
+        Encode texts to embeddings.
+        Compatible with SentenceTransformer.encode() interface.
+        """
+        if self._use_ollama_fallback:
+            return self._encode_with_ollama(texts, convert_to_numpy)
+
+        try:
+            return self._hf_model.encode(texts, convert_to_numpy=convert_to_numpy, batch_size=batch_size)
+        except Exception as e:
+            logger.warning(f"HuggingFace encoding failed: {e}, falling back to Ollama")
+            if self._ollama_model is None:
+                self._init_ollama_fallback()
+            return self._encode_with_ollama(texts, convert_to_numpy)
+
+    def _encode_with_ollama(self, texts: List[str], convert_to_numpy: bool = True):
+        """Encode using Ollama embeddings."""
+        embeddings = self._ollama_model.embed_documents(texts)
+        if convert_to_numpy:
+            return np.array(embeddings)
+        return embeddings
+
+
+# Embedding model (single instance with fallback support)
 EMBEDDING_MODEL_NAME = os.getenv(
     "EMBEDDING_MODEL",
     "sentence-transformers/multi-qa-mpnet-base-dot-v1"
 )
-embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+OLLAMA_EMBEDDING_MODEL = os.getenv(
+    "OLLAMA_EMBEDDING_MODEL",
+    "snowflake-arctic-embed:latest"
+)
+embedding_model = HybridEmbeddingModel()
 
 # Redis for job tracking
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
@@ -126,7 +211,8 @@ USE_POSITION_AWARE = os.getenv("USE_POSITION_AWARE_EXTRACTION", "true").lower() 
 
 logger.info("Document Ingestion Service initialized")
 logger.info(f"ChromaDB: {CHROMA_HOST}:{CHROMA_PORT}")
-logger.info(f"Embedding model: {EMBEDDING_MODEL_NAME}")
+logger.info(f"Primary embedding model: {EMBEDDING_MODEL_NAME}")
+logger.info(f"Fallback embedding model (Ollama): {OLLAMA_EMBEDDING_MODEL}")
 logger.info(f"Redis: {REDIS_URL}")
 logger.info(f"Position-aware extraction: {'ENABLED' if USE_POSITION_AWARE else 'DISABLED'}")
 
