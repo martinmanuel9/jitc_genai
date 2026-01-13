@@ -3,6 +3,7 @@ from functools import lru_cache
 from contextlib import contextmanager
 from sqlalchemy.orm import Session
 from fastapi import Depends
+import os
 
 from core.database import get_db, SessionLocal
 from core.config import get_settings, Settings
@@ -325,9 +326,12 @@ def get_agent_service_legacy():
     return AgentService()
 
 
-def get_document_service():
+def get_document_service(db: Session = Depends(get_db)):
     """
     Get DocumentService instance for document generation.
+
+    Args:
+        db: Database session (automatically injected)
 
     Returns:
         DocumentService: Document generation service
@@ -340,7 +344,32 @@ def get_document_service():
             return doc_service.generate(...)
     """
     from services.generate_docs_service import DocumentService
-    return DocumentService()
+    from services.rag_service import RAGService
+    from services.agent_service import AgentService
+    from services.llm_service import LLMService
+
+    settings = get_settings()
+
+    # Initialize required services
+    rag_service = RAGService()
+    agent_service = AgentService()
+    llm_service = LLMService(db=db)
+
+    # Construct URLs from settings
+    chroma_url = f"http://{settings.chroma_host}:{settings.chroma_port}"
+    # FastAPI base URL (use container name for inter-service communication)
+    fastapi_url = os.getenv("FASTAPI_URL", "http://fastapi:9020")
+    # Agent API is on the same FastAPI server
+    agent_api_url = f"{fastapi_url}/api/agent"
+
+    return DocumentService(
+        rag_service=rag_service,
+        agent_service=agent_service,
+        llm_service=llm_service,
+        chroma_url=chroma_url,
+        fastapi_url=fastapi_url,
+        agent_api_url=agent_api_url
+    )
 
 
 # Alias for backward compatibility

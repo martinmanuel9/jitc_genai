@@ -11,6 +11,7 @@ import json
 import uuid
 import os
 import redis
+import requests
 from datetime import datetime
 import logging
 
@@ -21,6 +22,8 @@ from services.rag_service import RAGService
 from services.agent_service import AgentService
 from core.dependencies import document_service_dep
 from repositories.agent_set_repository import AgentSetRepository
+from repositories.versioning_repository import TestPlanRepository, TestPlanVersionRepository
+from models.versioning import VersionStatus
 from sqlalchemy.orm import Session
 from core.database import get_db
 from config.model_profiles import get_model_profile, get_all_profiles, get_profile_choices, estimate_processing_time
@@ -41,7 +44,7 @@ class GenerateJSONTestPlanRequest(BaseModel):
     source_doc_ids: Optional[List[str]] = None
     doc_title: Optional[str] = "Comprehensive Test Plan"
     agent_set_id: int
-    sectioning_strategy: Optional[str] = None  # Will be set by profile if not specified
+    sectioning_strategy: Optional[str] = None  # Deprecated: always uses heading-based hierarchy
     chunks_per_section: Optional[int] = None  # Will be set by profile if not specified
     model_profile: Optional[str] = "fast"  # fast, balanced, or quality
 
@@ -146,18 +149,20 @@ async def generate_json_test_plan(
     db: Session = Depends(get_db)
 ):
     """
-    Generate test plan directly in JSON format.
-    
-    This endpoint:
+    Generate test plan directly in JSON format with automatic draft versioning.
+
+    Workflow:
     1. Generates test plan using multi-agent service
     2. Converts result to JSON structure
-    3. Returns structured JSON for test card generation
-    
+    3. Creates TestPlan and TestPlanVersion with status=DRAFT
+    4. Vectorizes to ChromaDB collection "test_plan_drafts"
+    5. Returns structured JSON for editing
+
     Args:
         req: Generation request with source documents and agent set
-        
+
     Returns:
-        JSON test plan structure
+        JSON test plan structure with version metadata
     """
     try:
         # Get model profile settings
@@ -196,14 +201,14 @@ async def generate_json_test_plan(
             pipeline_id=pipeline_id,
             model_profile=req.model_profile  # Pass profile to service
         )
-        
+
         if not docs or len(docs) == 0:
             raise ValueError("No test plan generated")
-        
+
         # Convert result to JSON
         doc = docs[0]
         final_test_plan = doc.get("_final_test_plan")  # If service stores the object
-        
+
         if final_test_plan:
             json_test_plan = JSONTestPlanService.final_test_plan_to_json(final_test_plan)
         else:
@@ -225,64 +230,145 @@ async def generate_json_test_plan(
                     "sections": []
                 }
             }
-        
+
         # Validate JSON structure
         is_valid, validation_msg = JSONTestPlanService.validate_json_test_plan(json_test_plan)
 
         if not is_valid:
             raise ValueError(f"Invalid test plan JSON: {validation_msg}")
 
-        saved_document_id = None
-        try:
-            collection_name = "json_test_plans"
-            fastapi_url = os.getenv("FASTAPI_URL", "http://localhost:9020").rstrip("/")
-            list_resp = requests.get(f"{fastapi_url}/api/vectordb/collections", timeout=10)
-            list_resp.raise_for_status()
-            collections = list_resp.json().get("collections", [])
-            if collection_name not in collections:
-                create_resp = requests.post(
-                    f"{fastapi_url}/api/vectordb/collection/create",
-                    params={"collection_name": collection_name},
-                    timeout=10
-                )
-                create_resp.raise_for_status()
+        # ================================================================
+        # NEW WORKFLOW: Create TestPlan + TestPlanVersion with DRAFT status
+        # ================================================================
 
-            saved_document_id = f"json_test_plan_{uuid.uuid4().hex[:12]}"
+        from models.versioning import TestPlan, TestPlanVersion
+
+        # Generate unique plan_key from title
+        plan_key = f"{req.doc_title.lower().replace(' ', '_')}_{pipeline_id}"
+
+        # Create or get TestPlan
+        test_plan_repo = TestPlanRepository(db)
+        test_plan = test_plan_repo.create_from_dict({
+            "plan_key": plan_key,
+            "title": req.doc_title,
+            "collection_name": "test_plan_drafts",
+            "percent_complete": 0
+        })
+
+        # Create document_id for ChromaDB
+        draft_document_id = f"draft_{test_plan.id}_{uuid.uuid4().hex[:8]}"
+
+        # Create TestPlanVersion with DRAFT status
+        version_repo = TestPlanVersionRepository(db)
+        version = version_repo.create_from_dict({
+            "plan_id": test_plan.id,
+            "version_number": 1,
+            "document_id": draft_document_id,
+            "status": VersionStatus.DRAFT,
+            "based_on_version_id": None
+        })
+
+        db.commit()
+
+        logger.info(f"Created TestPlan {test_plan.id} with version {version.version_number} (status: {version.status.value})")
+
+        # ================================================================
+        # Vectorize to ChromaDB collection "test_plan_drafts"
+        # ================================================================
+
+        try:
+            from integrations.chromadb_client import get_chroma_client
+
+            collection_name = "test_plan_drafts"
+            chroma_client = get_chroma_client()
+
+            # Get or create collection
+            collection = chroma_client.get_or_create_collection(collection_name)
+            logger.info(f"Using ChromaDB collection: {collection_name}")
+
+            # Vectorize each section as a separate document
             metadata = json_test_plan.get("test_plan", {}).get("metadata", {})
-            save_payload = {
-                "collection_name": collection_name,
-                "documents": [json.dumps(json_test_plan)],
-                "ids": [saved_document_id],
-                "metadatas": [{
-                    "title": metadata.get("title", req.doc_title),
-                    "pipeline_id": metadata.get("pipeline_id", ""),
-                    "generated_at": metadata.get("generated_at", datetime.now().isoformat()),
-                    "agent_set_id": req.agent_set_id,
-                    "source_collections": json.dumps(req.source_collections or []),
-                    "source_doc_ids": json.dumps(req.source_doc_ids or []),
-                    "processing_status": metadata.get("processing_status", "COMPLETED")
-                }]
-            }
-            add_resp = requests.post(
-                f"{fastapi_url}/api/vectordb/documents/add",
-                json=save_payload,
-                timeout=10
+            sections = json_test_plan.get("test_plan", {}).get("sections", [])
+
+            documents_to_add = []
+            ids_to_add = []
+            metadatas_to_add = []
+
+            for idx, section in enumerate(sections):
+                section_doc_id = f"{draft_document_id}_section_{idx}"
+                section_content = json.dumps(section, indent=2)
+
+                documents_to_add.append(section_content)
+                ids_to_add.append(section_doc_id)
+                metadatas_to_add.append({
+                    "plan_id": str(test_plan.id),
+                    "version_id": str(version.id),
+                    "version_number": str(version.version_number),
+                    "section_id": section.get("section_id", ""),
+                    "section_title": section.get("section_title", ""),
+                    "section_index": str(idx),
+                    "test_plan_title": req.doc_title,
+                    "pipeline_id": pipeline_id,
+                    "status": "draft",
+                    "type": "test_plan_section"
+                })
+
+            # Also store full test plan metadata document
+            full_doc_id = draft_document_id
+            documents_to_add.append(json.dumps(json_test_plan, indent=2))
+            ids_to_add.append(full_doc_id)
+            metadatas_to_add.append({
+                "plan_id": str(test_plan.id),
+                "version_id": str(version.id),
+                "version_number": str(version.version_number),
+                "title": metadata.get("title", req.doc_title),
+                "pipeline_id": pipeline_id,
+                "generated_at": metadata.get("generated_at", datetime.now().isoformat()),
+                "agent_set_id": str(req.agent_set_id),
+                "source_collections": json.dumps(req.source_collections or []),
+                "source_doc_ids": json.dumps(req.source_doc_ids or []),
+                "processing_status": metadata.get("processing_status", "COMPLETED"),
+                "status": "draft",
+                "type": "test_plan_full"
+            })
+
+            # Add documents directly to ChromaDB (no HTTP requests!)
+            collection.add(
+                documents=documents_to_add,
+                ids=ids_to_add,
+                metadatas=metadatas_to_add
             )
-            add_resp.raise_for_status()
+
+            logger.info(f"Vectorized {len(sections)} sections + 1 full document to collection '{collection_name}'")
+
         except Exception as save_error:
-            logger.warning(f"Failed to save JSON test plan to collection: {save_error}")
+            logger.error(f"Failed to vectorize draft to ChromaDB: {save_error}", exc_info=True)
+            # Don't fail the whole request, but log the error
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to vectorize draft: {str(save_error)}"
+            )
+
+        # Add version metadata to response
+        json_test_plan["test_plan"]["metadata"]["plan_id"] = test_plan.id
+        json_test_plan["test_plan"]["metadata"]["version_id"] = version.id
+        json_test_plan["test_plan"]["metadata"]["version_number"] = version.version_number
+        json_test_plan["test_plan"]["metadata"]["status"] = version.status.value
+        json_test_plan["test_plan"]["metadata"]["document_id"] = draft_document_id
 
         return JSONTestPlanResponse(
             success=True,
             test_plan=json_test_plan,
-            message=f"Successfully generated JSON test plan with {len(json_test_plan.get('test_plan', {}).get('sections', []))} sections",
+            message=f"Successfully generated DRAFT test plan with {len(sections)} sections (Plan ID: {test_plan.id}, Version: {version.version_number})",
             processing_status="COMPLETED",
             docx_b64=doc.get("docx_b64"),
-            saved_document_id=saved_document_id
+            saved_document_id=draft_document_id
         )
-    
+
     except Exception as e:
         logger.error(f"Failed to generate JSON test plan: {e}", exc_info=True)
+        db.rollback()
         raise HTTPException(status_code=500, detail=f"Test plan generation failed: {str(e)}")
 
 

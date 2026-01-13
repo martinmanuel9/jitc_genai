@@ -56,7 +56,7 @@ class GenerateRequest(BaseModel):
     max_actor_workers:    Optional[int]         = 4
     critic_batch_size:    Optional[int]         = 15
     critic_batch_char_cap: Optional[int]        = 8000
-    sectioning_strategy:  Optional[str]         = "auto"   # auto | by_chunks | by_metadata | by_pages
+    sectioning_strategy:  Optional[str]         = None     # Deprecated: always uses heading-based hierarchy
     chunks_per_section:   Optional[int]         = 5
     agent_set_id:         int                   = None  # Required agent set for orchestration
     model_profile:        Optional[str]         = "fast"  # fast | balanced | quality - controls speed vs quality tradeoff
@@ -113,7 +113,7 @@ class OptimizedTestPlanRequest(BaseModel):
     source_doc_ids:       Optional[List[str]]   = None
     doc_title:            Optional[str]         = "Comprehensive Test Plan"
     max_workers:          Optional[int]         = 4
-    sectioning_strategy:  Optional[str]         = "auto"
+    sectioning_strategy:  Optional[str]         = None     # Deprecated: always uses heading-based hierarchy
     chunks_per_section:   Optional[int]         = 5
     agent_set_id:         int                   = None  # Required agent set for orchestration
 
@@ -674,7 +674,7 @@ async def cleanup_stale_pipelines(max_age_minutes: int = 30):
 class PreviewRequest(BaseModel):
     source_collections:   Optional[List[str]]   = None
     source_doc_ids:       Optional[List[str]]   = None
-    sectioning_strategy:  Optional[str]         = "auto"
+    sectioning_strategy:  Optional[str]         = None     # Deprecated: always uses heading-based hierarchy
     chunks_per_section:   Optional[int]         = 5
     use_rag:              Optional[bool]        = True
     top_k:                Optional[int]         = 5
@@ -1718,18 +1718,29 @@ async def _add_test_cards_to_markdown(
 # TEST CARD DOCUMENT MANAGEMENT (New Design - Separate Documents)
 # ============================================================================
 
+class SelectedProcedure(BaseModel):
+    """A selected procedure for test card generation"""
+    section_id: str
+    procedure_id: str
+
+
 class GenerateTestCardsFromPlanRequest(BaseModel):
     """Request to generate test card documents from a test plan"""
     test_plan_id: str
     collection_name: str = "generated_test_plan"
     format: str = "markdown_table"  # markdown_table, json, docx_table
+    selected_procedures: Optional[List[SelectedProcedure]] = None  # If None, generate all
 
     class Config:
         json_schema_extra = {
             "example": {
                 "test_plan_id": "testplan_multiagent_pipeline_abc123_def456",
                 "collection_name": "generated_test_plan",
-                "format": "markdown_table"
+                "format": "markdown_table",
+                "selected_procedures": [
+                    {"section_id": "section_1", "procedure_id": "proc_1"},
+                    {"section_id": "section_2", "procedure_id": "proc_2"}
+                ]
             }
         }
 
@@ -2011,7 +2022,7 @@ async def generate_test_cards_from_plan(
         if not test_cards:
             raise HTTPException(
                 status_code=400,
-                detail="No test procedures found in test plan. Unable to generate test cards."
+                detail="No test procedures found in test plan. Make sure you have reviewed at least one section in the Edit Test Plan tab before generating test cards."
             )
 
         logger.info(f"Generated {len(test_cards)} test card documents")
@@ -2081,6 +2092,15 @@ async def generate_test_cards_from_plan_async(
         redis_client = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
 
         now = datetime.now().isoformat()
+
+        # Serialize selected_procedures for Redis storage and Celery task
+        selected_procedures_list = None
+        if req.selected_procedures:
+            selected_procedures_list = [
+                {"section_id": p.section_id, "procedure_id": p.procedure_id}
+                for p in req.selected_procedures
+            ]
+
         job_meta = {
             "job_id": job_id,
             "test_plan_id": req.test_plan_id,
@@ -2094,14 +2114,15 @@ async def generate_test_cards_from_plan_async(
             "sections_processed": "0",
             "total_sections": "0",
             "test_cards_generated": "0",
-            "celery_task_id": ""  # Will be updated when task starts
+            "celery_task_id": "",  # Will be updated when task starts
+            "selected_procedures_count": str(len(selected_procedures_list)) if selected_procedures_list else "all"
         }
         redis_client.hset(f"testcard_job:{job_id}:meta", mapping=job_meta)
         redis_client.expire(f"testcard_job:{job_id}:meta", 604800)  # 7 days
 
-        # Submit task to Celery
+        # Submit task to Celery (pass selected_procedures as 5th argument)
         celery_task = generate_test_cards_task.apply_async(
-            args=[job_id, req.test_plan_id, req.collection_name, req.format],
+            args=[job_id, req.test_plan_id, req.collection_name, req.format, selected_procedures_list],
             task_id=f"celery_{job_id}",  # Use custom task ID for easier tracking
         )
 
@@ -2320,12 +2341,41 @@ async def query_test_cards(req: QueryTestCardsRequest):
             where["execution_status"] = req.execution_status
 
         # Query ChromaDB with filters (much faster than fetching all and filtering)
+        result = None
         if where:
             result = collection.get(
                 where=where,
                 limit=1000,  # Reasonable limit
                 include=["documents", "metadatas"]
             )
+
+            # If no results found with test_plan_id, try searching by test_plan_title
+            # This handles cases where IDs might not match across systems
+            if req.test_plan_id and not result.get("ids"):
+                logger.info(f"No results for test_plan_id={req.test_plan_id}, trying fallback search")
+                # Get all test cards and filter client-side (less efficient but more robust)
+                all_result = collection.get(
+                    limit=1000,
+                    include=["documents", "metadatas"]
+                )
+                # Filter by partial ID match or by presence of test cards for this plan
+                filtered_ids = []
+                filtered_docs = []
+                filtered_metas = []
+                for idx, doc_id in enumerate(all_result.get("ids", [])):
+                    meta = all_result.get("metadatas", [])[idx] if idx < len(all_result.get("metadatas", [])) else {}
+                    stored_plan_id = meta.get("test_plan_id", "")
+                    # Check for exact match, partial match, or if the test_plan_id contains our query ID
+                    if (stored_plan_id == req.test_plan_id or
+                        req.test_plan_id in stored_plan_id or
+                        stored_plan_id in req.test_plan_id):
+                        filtered_ids.append(doc_id)
+                        filtered_docs.append(all_result.get("documents", [])[idx] if idx < len(all_result.get("documents", [])) else "")
+                        filtered_metas.append(meta)
+
+                if filtered_ids:
+                    logger.info(f"Fallback search found {len(filtered_ids)} test cards")
+                    result = {"ids": filtered_ids, "documents": filtered_docs, "metadatas": filtered_metas}
         else:
             # If no filters, get recent test cards only
             result = collection.get(
@@ -2354,6 +2404,7 @@ async def query_test_cards(req: QueryTestCardsRequest):
                 "requirement_id": metadata.get("requirement_id", ""),
                 "requirement_text": metadata.get("requirement_text", ""),
                 "execution_status": metadata.get("execution_status", "not_executed"),
+                "review_status": metadata.get("review_status", "DRAFT"),  # Review workflow status
                 "executed_by": metadata.get("executed_by", ""),
                 "executed_at": metadata.get("executed_at", ""),
                 "execution_duration_minutes": metadata.get("execution_duration_minutes", 0),

@@ -24,6 +24,9 @@ JSON Schema:
         "section_id": str,
         "section_title": str,
         "section_index": int,
+        "source_section_key": str,  # Original section key from source (e.g., "doc_name - Page 3")
+        "source_document": str,  # Source document name
+        "source_page": int,  # Original page number (if available)
         "synthesized_rules": str,
         "actor_count": int,
         "dependencies": [str],
@@ -70,23 +73,79 @@ class JSONTestPlanService:
         section_id: str = None
     ) -> Dict[str, Any]:
         """
-        Convert a CriticResult to a JSON section object.
-        
+        Convert a CriticResult to a JSON section object with structured metadata.
+
         Args:
             critic_result: CriticResult object from multi-agent service
             section_index: Index of the section in the test plan
             section_id: Optional explicit section ID (generated if not provided)
-            
+
         Returns:
             Dictionary representing the JSON section
         """
-        if section_id is None:
+        # Check for attached section_metadata (from Phase 2)
+        section_metadata = None
+        if hasattr(critic_result, '_metadata'):
+            section_metadata = critic_result._metadata
+
+        # Use structured metadata if available (NEW BEHAVIOR)
+        if section_metadata is not None:
+            # Use source section key as section_id for synchronization
+            section_id = section_metadata.section_key
+
+            return {
+                "section_id": section_id,
+                "section_title": section_metadata.heading_text,
+                "section_index": section_index,
+
+                # Structured metadata fields (no parsing!)
+                "source_section_key": section_metadata.section_key,
+                "source_document": section_metadata.document_name,
+                "source_page": section_metadata.page_number,  # Numeric, not parsed
+                "heading_level": section_metadata.heading_level,
+                "parent_heading": section_metadata.parent_heading,
+
+                # Test plan content
+                "synthesized_rules": critic_result.synthesized_rules,
+                "actor_count": critic_result.actor_count,
+                "dependencies": critic_result.dependencies or [],
+                "conflicts": critic_result.conflicts or [],
+                "test_procedures": critic_result.test_procedures or []
+            }
+
+        # FALLBACK: Old parsing behavior for backward compatibility
+        # Use source_section_key if available, otherwise use provided section_id or generate UUID
+        if hasattr(critic_result, 'source_section_key') and critic_result.source_section_key:
+            # Use source section key as section_id for synchronization
+            section_id = critic_result.source_section_key
+        elif section_id is None:
             section_id = f"section_{uuid.uuid4().hex[:8]}"
-        
+
+        # Parse source_section_key to extract document name and page number
+        source_section_key = getattr(critic_result, 'source_section_key', section_id)
+        source_document = ""
+        source_page = None
+
+        if source_section_key and " - " in source_section_key:
+            parts = source_section_key.split(" - ", 1)
+            source_document = parts[0]
+
+            # Try to extract page number from section title (e.g., "Page 5")
+            if len(parts) > 1:
+                section_part = parts[1]
+                if section_part.startswith("Page "):
+                    try:
+                        source_page = int(section_part.replace("Page ", "").strip())
+                    except (ValueError, AttributeError):
+                        pass
+
         return {
             "section_id": section_id,
             "section_title": critic_result.section_title,
             "section_index": section_index,
+            "source_section_key": source_section_key,
+            "source_document": source_document,
+            "source_page": source_page,
             "synthesized_rules": critic_result.synthesized_rules,
             "actor_count": critic_result.actor_count,
             "dependencies": critic_result.dependencies or [],

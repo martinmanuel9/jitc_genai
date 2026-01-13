@@ -107,6 +107,7 @@ class JobStatusMonitor:
                 self._render_unknown(status_response)
 
             # Auto-refresh if configured and job is in progress
+            # Uses st.fragment (if available) or manual refresh button to avoid exhausting file descriptors
             if self.auto_refresh_interval and status_lower in ["queued", "processing", "initializing", "running"]:
                 import time
                 last_refresh_key = f"{self.session_key}_last_refresh"
@@ -118,14 +119,20 @@ class JobStatusMonitor:
 
                 # Check if it's time to refresh
                 time_since_refresh = current_time - st.session_state[last_refresh_key]
+                remaining = max(0, int(self.auto_refresh_interval - time_since_refresh))
+
+                # Show refresh status and manual button
+                refresh_col1, refresh_col2 = st.columns([3, 1])
+                with refresh_col1:
+                    st.caption(f"Next auto-refresh in {remaining}s (or click Refresh)")
+                with refresh_col2:
+                    if st.button("🔄 Refresh", key=f"{self.session_key}_manual_refresh"):
+                        st.session_state[last_refresh_key] = current_time
+                        st.rerun()
+
+                # Only auto-rerun when interval is reached - NO continuous sleep/rerun loop
                 if time_since_refresh >= self.auto_refresh_interval:
                     st.session_state[last_refresh_key] = current_time
-                    st.rerun()
-                else:
-                    # Show countdown to next refresh
-                    remaining = int(self.auto_refresh_interval - time_since_refresh)
-                    st.caption(f"Auto-refreshing in {remaining}s...")
-                    time.sleep(1)
                     st.rerun()
 
             return status
@@ -203,17 +210,16 @@ class JobStatusMonitor:
             elapsed_since_completion = time.time() - st.session_state[completion_time_key]
             clear_delay = 3  # Show success for 3 seconds
 
+            remaining = max(0, int(clear_delay - elapsed_since_completion))
+
             if elapsed_since_completion >= clear_delay:
                 # Clean up and clear
                 del st.session_state[completion_time_key]
                 self._clear_job()
                 st.rerun()
             else:
-                # Show countdown and auto-refresh
-                remaining = int(clear_delay - elapsed_since_completion)
+                # Show countdown - NO continuous sleep/rerun loop
                 st.caption(f"Auto-clearing in {remaining}s...")
-                time.sleep(1)
-                st.rerun()
         else:
             # Manual clear button
             if st.button("Clear Status", key=f"{self.session_key}_clear_completed", type="secondary"):
@@ -245,17 +251,16 @@ class JobStatusMonitor:
             elapsed_since_failure = time.time() - st.session_state[failure_time_key]
             clear_delay = 5  # Show error for 5 seconds (longer to read error message)
 
+            remaining = max(0, int(clear_delay - elapsed_since_failure))
+
             if elapsed_since_failure >= clear_delay:
                 # Clean up and clear
                 del st.session_state[failure_time_key]
                 self._clear_job()
                 st.rerun()
             else:
-                # Show countdown and auto-refresh
-                remaining = int(clear_delay - elapsed_since_failure)
+                # Show countdown - NO continuous sleep/rerun loop
                 st.caption(f"Auto-clearing in {remaining}s...")
-                time.sleep(1)
-                st.rerun()
         else:
             col1, col2 = st.columns(2)
             with col1:

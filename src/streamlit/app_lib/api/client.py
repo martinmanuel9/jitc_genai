@@ -147,6 +147,21 @@ class APIClient:
         except Exception as e:
             self._handle_error(e, url, show_errors)
 
+    def patch(
+        self,
+        endpoint: str,
+        data: Dict[str, Any],
+        timeout: int = 30,
+        show_errors: bool = True
+    ) -> Dict[str, Any]:
+        url = self._build_url(endpoint)
+        try:
+            response = self.session.patch(url, json=data, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            self._handle_error(e, url, show_errors)
+
     def delete(
         self,
         endpoint: str,

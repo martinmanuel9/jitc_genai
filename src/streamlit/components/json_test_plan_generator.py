@@ -10,31 +10,41 @@ from app_lib.api.client import api_client
 
 def JSON_Test_Plan_Generator():
     """Generate test plans in JSON format for better structure and test card generation"""
-    st.header("JSON Test Plan Generator")
-
     st.info("""
-    **Workflow**: Generate test plans as structured JSON documents and export DOCX.
+    **Workflow**: Generate test plans.
     """)
 
-    st.subheader("Generate Test Plan in JSON Format")
-        
-        # Load agent sets
-        try:
-            agent_sets_response = api_client.get(f"{config.fastapi_url}/api/agent-sets")
-            agent_sets = agent_sets_response.get("agent_sets", [])
-            active_agent_sets = [s for s in agent_sets if s.get('is_active', True)]
-        except Exception as e:
-            st.warning(f"Could not load agent sets: {e}")
-            active_agent_sets = []
-        
-        if not active_agent_sets:
-            st.error("No agent sets available. Please create an agent set first.")
-            return
-        
+    st.subheader("Generate Test Plan")
+
+    # Load agent sets (no timeout)
+    active_agent_sets = []
+    try:
+        agent_sets_response = api_client.get(
+            f"{config.fastapi_url}/api/agent-sets",
+            timeout=None
+        )
+        agent_sets = agent_sets_response.get("agent_sets", [])
+        active_agent_sets = [s for s in agent_sets if s.get('is_active', True)]
+    except Exception as e:
+        st.error(f"Could not load agent sets: {e}")
+        if st.button("Retry"):
+            st.rerun()
+        return
+
+    if not active_agent_sets:
+        st.error("No agent sets available. Please create an agent set first.")
+        return
+
+    # Initialize session state for download
+    if 'json_download_docx' not in st.session_state:
+        st.session_state.json_download_docx = None
+    if 'json_download_filename' not in st.session_state:
+        st.session_state.json_download_filename = None
+
     # Form for generation
     with st.form("json_generation_form"):
         col1, col2 = st.columns(2)
-        
+
         with col1:
             # Agent set selection
             agent_set_names = [s['name'] for s in active_agent_sets]
@@ -43,16 +53,15 @@ def JSON_Test_Plan_Generator():
                 options=agent_set_names,
                 key="json_agent_set"
             )
-            
+
             agent_set = next((s for s in active_agent_sets if s['name'] == selected_agent_set), None)
-            
+
             # Document title
             doc_title = st.text_input(
                 "Test Plan Title",
-                value="JSON Test Plan",
                 key="json_title"
             )
-        
+
         with col2:
             # Model profile selection (Speed vs Quality)
             model_profile = st.radio(
@@ -65,7 +74,7 @@ def JSON_Test_Plan_Generator():
                 }.get(x, x),
                 index=0,
                 key="json_model_profile",
-                help="Fast: Quick drafts. Balanced: Good quality, moderate speed. Quality: Best results, slower."
+                help="Fast: Quick drafts. Balanced: Good quality, moderate speed. Quality: Best results, slower. Processing will run to completion without timeout."
             )
 
             # Show profile-based chunk settings
@@ -89,26 +98,30 @@ def JSON_Test_Plan_Generator():
                     key="json_chunks",
                     help=f"Recommended for {model_profile} profile: {default_chunks}"
                 )
-        
+
         # Source documents
         st.markdown("### Source Documents")
         
-        # Load collections
+        # Load collections (exclude output collections)
         try:
             from services.chromadb_service import chromadb_service
-            collections = chromadb_service.get_collections()
+            all_collections = chromadb_service.get_collections()
+            # Filter out output collections that should not be used as sources
+            output_collections = {"test_plan_drafts", "generated_test_plan", "json_test_plans", "generated_documents"}
+            collections = [c for c in all_collections if c not in output_collections]
         except Exception:
             collections = []
-        
+
         if not collections:
-            st.warning("No document collections available. Please upload documents first.")
+            st.warning("No source document collections available. Please upload documents first.")
             st.form_submit_button("Generate", disabled=True)
             return
-        
+
         source_collection = st.selectbox(
-            "Select Collection",
+            "Select Source Collection",
             options=collections,
-            key="json_collection"
+            key="json_collection",
+            help="Select the collection containing your source requirements documents (NOT draft/generated collections)"
         )
         
         # Load and select documents
@@ -139,7 +152,7 @@ def JSON_Test_Plan_Generator():
         
         # Generate button
         generate_button = st.form_submit_button(
-            "Generate JSON Test Plan",
+            "Generate Test Plan",
             type="primary",
             key="json_generate"
         )
@@ -150,80 +163,142 @@ def JSON_Test_Plan_Generator():
             elif not agent_set:
                 st.error("Please select an agent set")
             else:
-                # Calculate timeout based on profile
-                profile_timeouts = {"fast": 600, "balanced": 1200, "quality": 3600}
-                timeout_seconds = profile_timeouts.get(model_profile, 600)
+                # Create placeholders for progress display
+                progress_container = st.container()
+                with progress_container:
+                    st.markdown("### Generation Progress")
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    section_progress = st.empty()
 
-                with st.spinner(f"Generating JSON test plan using {model_profile} mode... (timeout: {timeout_seconds//60} min)"):
-                    try:
-                        payload = {
-                            "source_collections": [source_collection],
-                            "source_doc_ids": source_doc_ids,
-                            "doc_title": doc_title,
-                            "agent_set_id": agent_set['id'],
-                            "sectioning_strategy": sectioning_strategy,
-                            "chunks_per_section": chunks_per_section,
-                            "model_profile": model_profile
-                        }
+                try:
+                    import time
+                    import threading
 
-                        response = api_client.post(
-                            f"{config.fastapi_url}/api/json-test-plans/generate",
-                            data=payload,
-                            timeout=timeout_seconds
-                        )
-                        
-                        if response.get("success"):
-                            test_plan = response.get("test_plan", {})
-                            st.session_state.json_test_plan = test_plan
-                            
-                            metadata = test_plan.get("test_plan", {}).get("metadata", {})
-                            sections = test_plan.get("test_plan", {}).get("sections", [])
-                            
-                            st.success("✓ JSON test plan generated successfully!")
-                            
-                            # Display metrics
-                            col1, col2, col3, col4 = st.columns(4)
-                            with col1:
-                                st.metric("Sections", metadata.get("total_sections", 0))
-                            with col2:
-                                st.metric("Requirements", metadata.get("total_requirements", 0))
-                            with col3:
-                                st.metric("Test Procedures", metadata.get("total_test_procedures", 0))
-                            with col4:
-                                st.metric("Status", metadata.get("processing_status", "UNKNOWN"))
+                    # Estimate time based on profile and document count
+                    profile_times = {"fast": 30, "balanced": 60, "quality": 180}
+                    estimated_time = profile_times.get(model_profile, 60) * len(source_doc_ids)
 
-                            if response.get("saved_document_id"):
-                                st.caption(f"Saved to collection: {response.get('saved_document_id')}")
+                    status_text.info(f"Starting test plan generation (estimated: {estimated_time//60}m {estimated_time%60}s)...")
+                    section_progress.markdown(f"**Profile:** {model_profile.title()} | **Documents:** {len(source_doc_ids)}")
 
-                            docx_b64 = response.get("docx_b64")
-                            if docx_b64:
-                                import base64
-                                blob = base64.b64decode(docx_b64)
-                                st.download_button(
-                                    label="Download DOCX",
-                                    data=blob,
-                                    file_name=f"{metadata.get('title', doc_title)}.docx",
-                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    type="primary"
-                                )
-                            
-                            # Show section preview
-                            st.markdown("### Section Preview")
-                            for section in sections[:3]:  # Show first 3
-                                with st.expander(f"📋 {section.get('section_title')}"):
-                                    st.write(f"**Section ID**: {section.get('section_id')}")
-                                    st.write(f"**Test Procedures**: {len(section.get('test_procedures', []))}")
-                                    
-                                    if section.get('dependencies'):
-                                        st.write(f"**Dependencies**: {', '.join(section.get('dependencies'))}")
-                            
-                            if len(sections) > 3:
-                                st.info(f"... and {len(sections) - 3} more sections")
-                        else:
-                            st.error(f"Generation failed: {response.get('error', 'Unknown error')}")
-                    
-                    except Exception as e:
-                        st.error(f"Failed to generate test plan: {e}")
+                    payload = {
+                        "source_collections": [source_collection],
+                        "source_doc_ids": source_doc_ids,
+                        "doc_title": doc_title,
+                        "agent_set_id": agent_set['id'],
+                        "sectioning_strategy": sectioning_strategy,
+                        "chunks_per_section": chunks_per_section,
+                        "model_profile": model_profile
+                    }
+
+                    start_time = time.time()
+                    response_container = {"response": None, "error": None}
+
+                    def generate_in_thread():
+                        try:
+                            result = api_client.post(
+                                f"{config.fastapi_url}/api/json-test-plans/generate",
+                                data=payload,
+                                timeout=1800  # 30 minute timeout
+                            )
+                            response_container["response"] = result
+                        except Exception as e:
+                            response_container["error"] = e
+
+                    # Start generation in background thread
+                    thread = threading.Thread(target=generate_in_thread)
+                    thread.start()
+
+                    # Show animated progress while waiting
+                    stages = [
+                        "Extracting document sections...",
+                        "Analyzing requirements...",
+                        "Generating test procedures...",
+                        "Synthesizing test plan...",
+                        "Finalizing output..."
+                    ]
+                    stage_idx = 0
+
+                    while thread.is_alive():
+                        elapsed = int(time.time() - start_time)
+
+                        # Calculate progress based on elapsed time vs estimated
+                        progress_pct = min(elapsed / max(estimated_time, 1), 0.95)
+                        progress_bar.progress(progress_pct)
+
+                        # Cycle through stage messages
+                        if elapsed > 0 and elapsed % 15 == 0:
+                            stage_idx = min(stage_idx + 1, len(stages) - 1)
+
+                        current_stage = stages[stage_idx]
+                        mins, secs = divmod(elapsed, 60)
+
+                        status_text.info(f"⏳ {current_stage} ({mins}m {secs}s elapsed)")
+                        section_progress.markdown(f"**Progress:** ~{int(progress_pct * 100)}% complete")
+
+                        time.sleep(1)
+
+                    # Wait for thread to complete
+                    thread.join(timeout=5)
+
+                    # Check for errors
+                    if response_container["error"]:
+                        raise response_container["error"]
+
+                    response = response_container["response"]
+                    if not response:
+                        raise Exception("No response received from server")
+
+                    # Get final metadata for completion message
+                    final_metadata = {}
+                    final_sections = []
+                    if response and response.get("success"):
+                        test_plan_data = response.get("test_plan", {})
+                        final_metadata = test_plan_data.get("test_plan", {}).get("metadata", {})
+                        final_sections = test_plan_data.get("test_plan", {}).get("sections", [])
+
+                    # Clear progress display with final stats
+                    progress_bar.progress(1.0)
+                    status_text.success("✅ Generation complete!")
+                    section_progress.markdown(f"**Total Sections Generated:** {len(final_sections)} sections with {final_metadata.get('total_test_procedures', 0)} test procedures")
+
+                    if response.get("success"):
+                        test_plan = response.get("test_plan", {})
+                        st.session_state.json_test_plan = test_plan
+
+                        metadata = test_plan.get("test_plan", {}).get("metadata", {})
+                        sections = test_plan.get("test_plan", {}).get("sections", [])
+
+                        # Store download data in session state
+                        docx_b64 = response.get("docx_b64")
+                        if docx_b64:
+                            import base64
+                            st.session_state.json_download_docx = base64.b64decode(docx_b64)
+                            st.session_state.json_download_filename = f"{metadata.get('title', doc_title)}.docx"
+
+                        # Simple success message and guidance
+                        st.success(f"✅ Test plan generated with {len(sections)} sections!")
+                        st.info("💡 Navigate to **JSON Test Plan Side-by-Side Editor** to view and edit sections")
+
+                    else:
+                        st.error(f"Generation failed: {response.get('error', 'Unknown error')}")
+
+                except Exception as e:
+                    st.error(f"Failed to generate test plan: {e}")
+
+    # Download button outside form
+    if st.session_state.json_download_docx is not None:
+        st.markdown("---")
+        st.markdown("### Download Test Plan")
+        st.download_button(
+            label="📥 Download DOCX",
+            data=st.session_state.json_download_docx,
+            file_name=st.session_state.json_download_filename,
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            type="primary",
+            key="json_download_button"
+        )
 
 
 if __name__ == "__main__":

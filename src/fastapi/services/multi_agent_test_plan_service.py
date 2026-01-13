@@ -16,8 +16,9 @@ import os
 import re
 import uuid
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime
+from collections import defaultdict
 import redis
 import requests
 from docx import Document
@@ -59,6 +60,23 @@ class CriticResult:
     conflicts: List[str]
     test_procedures: List[Dict[str, Any]]
     actor_count: int
+    source_section_key: str = ""  # Original section key from source document (e.g., "doc_name - section_title")
+
+@dataclass
+class SectionWithMetadata:
+    """Section with preserved hierarchy metadata from document ingestion."""
+    section_key: str
+    page_number: int
+    document_name: str
+    heading_text: str
+    heading_level: int
+    parent_heading: Optional[str]
+    content: str
+    char_offset: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return asdict(self)
 
 @dataclass
 class FinalTestPlan:
@@ -495,9 +513,13 @@ class MultiAgentTestPlanService:
             if not sections:
                 logger.error("No sections extracted from ChromaDB - creating fallback plan")
                 return self._create_fallback_test_plan(doc_title, pipeline_id)
-            
-            # Log section keys for debugging
-            logger.info(f"Section keys: {list(sections.keys())[:5]}...")  # Show first 5 for debugging
+
+            # Log section keys for debugging (handle both Dict and List types)
+            if isinstance(sections, list):
+                section_keys = [s.section_key for s in sections[:5]]
+                logger.info(f"Section keys (with metadata): {section_keys}...")
+            else:
+                logger.info(f"Section keys: {list(sections.keys())[:5]}...")  # Show first 5 for debugging
             
             logger.info(f"Processing {len(sections)} sections with multi-agent pipeline")
             
@@ -582,51 +604,15 @@ class MultiAgentTestPlanService:
         source_doc_ids: List[str],
         sectioning_strategy: Optional[str] = None,
         chunks_per_section: Optional[int] = None
-    ) -> Dict[str, str]:
-        """Extract sections from ChromaDB with robust reconstruction fallback.
+    ) -> List[SectionWithMetadata]:  # Always returns List[SectionWithMetadata]
+        """Extract sections from ChromaDB with page → heading → body hierarchy.
 
-        Strategy:
-        - If explicit document IDs are provided, reconstruct full document(s) and split into natural sections.
-        - Otherwise, group by metadata-based 'section_title' or page and combine chunks.
+        Uses heading-based chunking metadata to preserve document structure.
         """
-        sections: Dict[str, str] = {}
-        strategy = (sectioning_strategy or "auto").lower()
-        group_size = max(int(chunks_per_section or 5), 1)
+        logger.info(f"Extracting sections with hierarchy from {len(source_collections)} collections")
 
-        if strategy == "by_chunks":
-            return self._extract_sections_by_chunks(source_collections, source_doc_ids, group_size)
-
-        if strategy == "by_metadata":
-            return self._extract_sections_by_metadata(source_collections, source_doc_ids)
-
-        # 1) Preferred path: reconstruct by provided document IDs
-        if source_doc_ids:
-            for collection_name in source_collections:
-                for doc_id in source_doc_ids:
-                    try:
-                        resp = requests.get(
-                            f"{self.fastapi_url}/api/vectordb/documents/reconstruct/{doc_id}",
-                            params={"collection_name": collection_name},
-                            timeout=180,
-                        )
-                        if not resp.ok:
-                            logger.warning(f"Reconstruct failed for doc_id={doc_id} in {collection_name}: {resp.status_code}")
-                            continue
-                        data = resp.json()
-                        content = data.get("reconstructed_content") or ""
-                        doc_name = data.get("document_name") or str(doc_id)
-                        if content and len(content.strip()) > 50:
-                            self._create_document_sections(doc_name, content, sections)
-                            logger.info(f"Reconstructed {doc_name}: sections now {len(sections)}")
-                    except Exception as e:
-                        logger.error(f"Reconstruct error for {doc_id} in {collection_name}: {e}")
-
-            if sections:
-                logger.info(f"Extracted {len(sections)} sections via reconstruct path")
-                return sections
-
-        # 2) Fallback path: metadata grouping from the collection
-        return self._extract_sections_by_metadata(source_collections, source_doc_ids)
+        # Always use hierarchical extraction (ignore sectioning_strategy parameter for backward compat)
+        return self._extract_sections_with_hierarchy(source_collections, source_doc_ids)
 
     def _extract_sections_by_metadata(
         self,
@@ -635,22 +621,19 @@ class MultiAgentTestPlanService:
     ) -> Dict[str, str]:
         sections: Dict[str, str] = {}
 
+        from integrations.chromadb_client import get_chroma_client
+
         for collection_name in source_collections:
             try:
-                response = requests.get(
-                    f"{self.fastapi_url}/api/vectordb/documents",
-                    params={"collection_name": collection_name},
-                    timeout=60
-                )
+                # Use direct ChromaDB client access
+                chroma_client = get_chroma_client()
+                collection = chroma_client.get_collection(collection_name)
 
-                if not response.ok:
-                    logger.error(f"Failed to fetch from collection {collection_name}")
-                    continue
-
-                data = response.json()
-                docs = data.get("documents", [])
-                metas = data.get("metadatas", [])
-                ids = data.get("ids", [])
+                # Get all documents from collection
+                result = collection.get()
+                docs = result.get("documents", [])
+                metas = result.get("metadatas", [])
+                ids = result.get("ids", [])
 
                 logger.info(f"Collection {collection_name} has {len(docs)} documents")
 
@@ -689,7 +672,12 @@ class MultiAgentTestPlanService:
             except Exception as e:
                 logger.error(f"Error processing collection {collection_name}: {e}")
 
+        # Log first 3 section keys for debugging
+        section_keys = list(sections.keys())[:3]
         logger.info(f"Extracted {len(sections)} sections for multi-agent processing (metadata path)")
+        if section_keys:
+            logger.info(f"Sample section keys (metadata path): {section_keys}")
+
         return sections
 
     def _extract_sections_by_chunks(
@@ -700,25 +688,23 @@ class MultiAgentTestPlanService:
     ) -> Dict[str, str]:
         sections: Dict[str, str] = {}
 
+        from integrations.chromadb_client import get_chroma_client
+
         for collection_name in source_collections:
             try:
-                response = requests.get(
-                    f"{self.fastapi_url}/api/vectordb/documents",
-                    params={"collection_name": collection_name},
-                    timeout=120
-                )
+                # Use direct ChromaDB client access
+                chroma_client = get_chroma_client()
+                collection = chroma_client.get_collection(collection_name)
 
-                if not response.ok:
-                    logger.error(f"Failed to fetch from collection {collection_name}")
-                    continue
-
-                data = response.json()
-                docs = data.get("documents", [])
-                metas = data.get("metadatas", [])
-                ids = data.get("ids", [])
+                # Get all documents from collection
+                result = collection.get()
+                docs = result.get("documents", [])
+                metas = result.get("metadatas", [])
+                ids = result.get("ids", [])
 
                 logger.info(f"Collection {collection_name} has {len(docs)} documents")
 
+                # Group by original page/section structure instead of artificial chunks
                 grouped: Dict[str, Dict[str, object]] = {}
                 for doc_id, doc, meta in zip(ids, docs, metas):
                     meta = meta or {}
@@ -734,24 +720,51 @@ class MultiAgentTestPlanService:
                         ):
                             continue
 
+                    # Extract page number from metadata (multiple sources)
+                    page_number = (
+                        meta.get("page_number") or
+                        meta.get("page") or
+                        meta.get("chunk_index", 0) + 1
+                    )
+
+                    # Use original section structure from document metadata
+                    # Priority: section_title > heading > title > Page N
+                    section_title = (
+                        meta.get("section_title") or
+                        meta.get("heading") or
+                        meta.get("title") or
+                        f"Page {page_number}"
+                    )
+
+                    # Log metadata for debugging (first few chunks only)
+                    if len(grouped) < 3:
+                        logger.info(f"Chunk metadata: doc_id={doc_id}, page={page_number}, title='{section_title}'")
+
+                    # Create section key preserving original structure
+                    # If section_title is already "Page N", don't duplicate
+                    if section_title.startswith("Page "):
+                        section_key = f"{doc_name} - {section_title}"
+                    else:
+                        section_key = f"{doc_name} - Page {page_number} - {section_title}"
+
                     chunk_index = meta.get("chunk_index", 0)
-                    entry = grouped.setdefault(original_doc_id, {"name": doc_name, "chunks": []})
+                    entry = grouped.setdefault(section_key, {
+                        "chunks": [],
+                        "page_number": page_number,
+                        "section_title": section_title
+                    })
                     entry["chunks"].append((chunk_index, doc))
 
-                for _, info in grouped.items():
+                # Combine chunks within each original section
+                for section_key, info in grouped.items():
                     chunks = sorted(info["chunks"], key=lambda item: item[0])
                     if not chunks:
                         continue
 
-                    for idx in range(0, len(chunks), chunks_per_section):
-                        chunk_slice = chunks[idx:idx + chunks_per_section]
-                        combined_content = "\n\n".join(
-                            chunk for _, chunk in chunk_slice if chunk and chunk.strip()
-                        )
-                        if len(combined_content.strip()) <= 100:
-                            continue
-                        group_number = idx // chunks_per_section + 1
-                        section_key = f"{info['name']} - Chunk Group {group_number}"
+                    combined_content = "\n\n".join(
+                        chunk for _, chunk in chunks if chunk and chunk.strip()
+                    )
+                    if len(combined_content.strip()) > 100:
                         sections[section_key] = combined_content
 
             except Exception as e:
@@ -759,8 +772,187 @@ class MultiAgentTestPlanService:
 
         logger.info(
             f"Extracted {len(sections)} sections for multi-agent processing "
-            f"(chunk grouping, size={chunks_per_section})"
+            f"(preserving original document page/section structure)"
         )
+
+        # Log first 3 section keys for debugging
+        section_keys = list(sections.keys())[:3]
+        if section_keys:
+            logger.info(f"Sample section keys: {section_keys}")
+
+        return sections
+
+    def _extract_sections_with_hierarchy(
+        self,
+        source_collections: List[str],
+        source_doc_ids: List[str]
+    ) -> List[SectionWithMetadata]:
+        """
+        Extract sections preserving page → heading → body structure.
+
+        This method queries ChromaDB with new metadata fields, groups chunks by page
+        and heading, combines heading + body chunks, and returns structured metadata.
+
+        Args:
+            source_collections: List of collection names to query
+            source_doc_ids: List of document IDs to filter by
+
+        Returns:
+            List[SectionWithMetadata] with full hierarchy metadata
+        """
+        logger.info(f"Extracting sections with hierarchy from {len(source_collections)} collections")
+
+        from integrations.chromadb_client import get_chroma_client
+
+        sections = []
+
+        for collection_name in source_collections:
+            try:
+                # Use direct ChromaDB client access
+                chroma_client = get_chroma_client()
+                collection = chroma_client.get_collection(collection_name)
+
+                # Get all documents from collection
+                result = collection.get(include=["documents", "metadatas"])
+                docs = result.get("documents", [])
+                metas = result.get("metadatas", [])
+                ids = result.get("ids", [])
+
+                logger.info(f"Collection {collection_name} has {len(docs)} chunks")
+
+                # Filter by source_doc_ids if specified
+                filtered_data = []
+                for doc_id, doc, meta in zip(ids, docs, metas):
+                    meta = meta or {}
+                    original_doc_id = meta.get("document_id") or doc_id
+                    doc_name = (
+                        meta.get("document_name") or
+                        meta.get("filename") or
+                        meta.get("source") or
+                        original_doc_id
+                    )
+
+                    # Filter by source_doc_ids
+                    if source_doc_ids:
+                        if original_doc_id not in source_doc_ids and not any(
+                            str(x) in str(doc_name) for x in source_doc_ids
+                        ):
+                            continue
+
+                    filtered_data.append((doc, meta))
+
+                logger.info(f"Filtered to {len(filtered_data)} chunks matching document IDs")
+
+                # Group chunks by page, then by heading
+                pages = defaultdict(lambda: defaultdict(list))
+
+                for doc, meta in filtered_data:
+                    # Extract page number (ensure it's an int)
+                    page_num = meta.get("page_number")
+                    if page_num is None:
+                        page_num = meta.get("page", meta.get("chunk_index", 0) + 1)
+                    try:
+                        page_num = int(page_num)
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid page_number: {page_num}, defaulting to 0")
+                        page_num = 0
+
+                    # Get heading information
+                    chunk_type = meta.get("chunk_type", "page")
+                    heading_text = meta.get("heading_text") or meta.get("parent_heading") or meta.get("section_title") or f"Page {page_num}"
+
+                    # Use parent_heading as the grouping key for body_text chunks
+                    if chunk_type == "body_text":
+                        heading_key = meta.get("parent_heading") or heading_text
+                    else:
+                        heading_key = heading_text
+
+                    # Get document name
+                    doc_name = meta.get("document_name") or meta.get("filename") or meta.get("document_id", "unknown")
+
+                    pages[page_num][heading_key].append({
+                        "type": chunk_type,
+                        "content": doc,
+                        "metadata": meta,
+                        "doc_name": doc_name
+                    })
+
+                # Create SectionWithMetadata objects (heading + body combined)
+                for page_num in sorted(pages.keys()):
+                    for heading_text, chunks in sorted(pages[page_num].items()):
+                        # Get metadata from heading chunk if available, otherwise first chunk
+                        heading_chunk = next(
+                            (c for c in chunks if c["type"] == "heading"),
+                            None
+                        )
+
+                        if heading_chunk:
+                            heading_meta = heading_chunk["metadata"]
+                        else:
+                            heading_meta = chunks[0]["metadata"]
+
+                        # Combine all content (heading + body)
+                        combined_content = "\n\n".join(
+                            c["content"] for c in chunks if c["content"] and c["content"].strip()
+                        )
+
+                        # Skip if content is too short
+                        if len(combined_content.strip()) < 100:
+                            continue
+
+                        # Extract metadata fields
+                        heading_level = heading_meta.get("heading_level", 1)
+                        try:
+                            heading_level = int(heading_level)
+                        except (ValueError, TypeError):
+                            heading_level = 1
+
+                        parent_heading = heading_meta.get("parent_heading")
+                        char_offset = heading_meta.get("start_char_offset", 0)
+                        try:
+                            char_offset = int(char_offset)
+                        except (ValueError, TypeError):
+                            char_offset = 0
+
+                        doc_name = chunks[0]["doc_name"]
+
+                        # Create section key
+                        section_key = f"{doc_name} - Page {page_num} - {heading_text}"
+
+                        # Create SectionWithMetadata object
+                        section = SectionWithMetadata(
+                            section_key=section_key,
+                            page_number=page_num,
+                            document_name=doc_name,
+                            heading_text=heading_text,
+                            heading_level=heading_level,
+                            parent_heading=parent_heading,
+                            content=combined_content,
+                            char_offset=char_offset
+                        )
+                        sections.append(section)
+
+                        # Log first few sections for debugging
+                        if len(sections) <= 3:
+                            logger.info(
+                                f"Section created: page={page_num}, heading='{heading_text}', "
+                                f"level={heading_level}, parent='{parent_heading}', "
+                                f"content_length={len(combined_content)}"
+                            )
+
+            except Exception as e:
+                logger.error(f"Error processing collection {collection_name}: {e}")
+
+        logger.info(
+            f"Extracted {len(sections)} sections with metadata "
+            f"(page → heading → body hierarchy preserved)"
+        )
+
+        # Log sample section keys
+        if sections:
+            sample_keys = [s.section_key for s in sections[:3]]
+            logger.info(f"Sample section keys: {sample_keys}")
+
         return sections
 
     def _clean_section_title(self, title: str) -> str:
@@ -983,15 +1175,27 @@ class MultiAgentTestPlanService:
         except Exception as e:
             logger.warning(f"Failed to zadd pipeline: {e}")
         
-        # Store sections for processing
-        for idx, (section_title, section_content) in enumerate(sections.items()):
-            section_data = {
-                "title": section_title,
-                "content": section_content,
-                "status": "PENDING",
-                "index": idx
-            }
-            self.redis_client.hset(f"pipeline:{pipeline_id}:section:{idx}", mapping=section_data)
+        # Store sections for processing (handle both Dict and List types)
+        if isinstance(sections, list):
+            # List[SectionWithMetadata]
+            for idx, section in enumerate(sections):
+                section_data = {
+                    "title": section.section_key,
+                    "content": section.content,
+                    "status": "PENDING",
+                    "index": idx
+                }
+                self.redis_client.hset(f"pipeline:{pipeline_id}:section:{idx}", mapping=section_data)
+        else:
+            # Dict[str, str]
+            for idx, (section_title, section_content) in enumerate(sections.items()):
+                section_data = {
+                    "title": section_title,
+                    "content": section_content,
+                    "status": "PENDING",
+                    "index": idx
+                }
+                self.redis_client.hset(f"pipeline:{pipeline_id}:section:{idx}", mapping=section_data)
         
         # Initialize result queues
         self.redis_client.delete(f"pipeline:{pipeline_id}:actor_results")
@@ -999,13 +1203,13 @@ class MultiAgentTestPlanService:
         
         logger.info(f"Pipeline {pipeline_id} initialized with {len(sections)} sections")
     
-    def _deploy_section_agents(self, pipeline_id: str, sections: Dict[str, str], agent_set_config: Optional[Dict[str, Any]] = None) -> List[CriticResult]:
+    def _deploy_section_agents(self, pipeline_id: str, sections: Any, agent_set_config: Optional[Dict[str, Any]] = None) -> List[CriticResult]:
         """
         Deploy multiple agents per section with Redis coordination
 
         Args:
             pipeline_id: Unique pipeline identifier
-            sections: Dictionary of section title -> content
+            sections: Either List[SectionWithMetadata] with hierarchy metadata or Dict[str, str] (legacy)
             agent_set_config: Optional agent set configuration. If None, uses default orchestration.
 
         Returns:
@@ -1016,7 +1220,7 @@ class MultiAgentTestPlanService:
             logger.info(f"Agent set has {len(agent_set_config.get('stages', []))} stages")
         else:
             logger.info(f"Deploying agents for {len(sections)} sections using default orchestration")
-        
+
         section_results = []
 
         # Use max_workers from profile (CPU-friendly settings)
@@ -1026,19 +1230,36 @@ class MultiAgentTestPlanService:
         # Process each section with multiple actor agents + critic
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_section = {}
-            
-            for idx, (section_title, section_content) in enumerate(sections.items()):
-                # Respect abort flag: stop submitting new work
-                if self._is_aborted(pipeline_id):
-                    logger.warning(f"Abort requested for pipeline {pipeline_id}; stopping new submissions at section {idx}")
-                    # Mark remaining sections as aborted
-                    self.redis_client.hset(f"pipeline:{pipeline_id}:section:{idx}", "status", "ABORTED")
-                    break
-                future = executor.submit(
-                    self._process_section_with_multi_agents,
-                    pipeline_id, idx, section_title, section_content, agent_set_config
-                )
-                future_to_section[future] = section_title
+
+            # Handle both List[SectionWithMetadata] and Dict[str, str]
+            if isinstance(sections, list):
+                # New path: List[SectionWithMetadata]
+                for idx, section in enumerate(sections):
+                    # Respect abort flag: stop submitting new work
+                    if self._is_aborted(pipeline_id):
+                        logger.warning(f"Abort requested for pipeline {pipeline_id}; stopping new submissions at section {idx}")
+                        # Mark remaining sections as aborted
+                        self.redis_client.hset(f"pipeline:{pipeline_id}:section:{idx}", "status", "ABORTED")
+                        break
+                    future = executor.submit(
+                        self._process_section_with_multi_agents,
+                        pipeline_id, idx, section.section_key, section.content, agent_set_config, section
+                    )
+                    future_to_section[future] = section.section_key
+            else:
+                # Legacy path: Dict[str, str]
+                for idx, (section_title, section_content) in enumerate(sections.items()):
+                    # Respect abort flag: stop submitting new work
+                    if self._is_aborted(pipeline_id):
+                        logger.warning(f"Abort requested for pipeline {pipeline_id}; stopping new submissions at section {idx}")
+                        # Mark remaining sections as aborted
+                        self.redis_client.hset(f"pipeline:{pipeline_id}:section:{idx}", "status", "ABORTED")
+                        break
+                    future = executor.submit(
+                        self._process_section_with_multi_agents,
+                        pipeline_id, idx, section_title, section_content, agent_set_config, None
+                    )
+                    future_to_section[future] = section_title
             
             # Collect results as they complete
             for future in as_completed(future_to_section):
@@ -1061,7 +1282,8 @@ class MultiAgentTestPlanService:
                                          section_idx: int,
                                          section_title: str,
                                          section_content: str,
-                                         agent_set_config: Dict[str, Any]) -> Optional[CriticResult]:
+                                         agent_set_config: Dict[str, Any],
+                                         section_metadata: Optional[SectionWithMetadata] = None) -> Optional[CriticResult]:
         """
         Process a single section with agents from agent set configuration
 
@@ -1071,6 +1293,7 @@ class MultiAgentTestPlanService:
             section_title: Title of the section
             section_content: Content of the section
             agent_set_config: Agent set configuration (required)
+            section_metadata: Full section metadata with hierarchy information
 
         Returns:
             CriticResult or None if aborted/failed
@@ -1125,14 +1348,34 @@ class MultiAgentTestPlanService:
                 # Create a CriticResult from the final outputs
                 if actor_results:
                     final_output = "\n\n".join([r.rules_extracted for r in actor_results])
+
+                    # Use heading_text from metadata if available, otherwise use section_title
+                    display_title = section_metadata.heading_text if section_metadata else section_title
+
+                    # Extract test procedures, dependencies, and conflicts from the combined output
+                    test_procedures = self._extract_test_procedures_from_markdown(final_output)
+                    dependencies = self._extract_dependencies_from_markdown(final_output)
+                    conflicts = self._extract_conflicts_from_markdown(final_output)
+
+                    logger.info(f"Agent set section '{display_title}': Extracted {len(test_procedures)} test procedures")
+
                     critic_result = CriticResult(
-                        section_title=section_title,
+                        section_title=display_title,
                         synthesized_rules=final_output,
-                        dependencies=[],
-                        conflicts=[],
-                        test_procedures=[],  # TODO: Parse test procedures from output
-                        actor_count=len(actor_results)
+                        dependencies=dependencies,
+                        conflicts=conflicts,
+                        test_procedures=test_procedures,
+                        actor_count=len(actor_results),
+                        source_section_key=section_title  # Preserve original section key
                     )
+
+                    # Attach metadata for JSON conversion
+                    if section_metadata:
+                        critic_result._metadata = section_metadata
+                        logger.info(
+                            f"Attached metadata to CriticResult: page={section_metadata.page_number}, "
+                            f"level={section_metadata.heading_level}, parent='{section_metadata.parent_heading}'"
+                        )
                 else:
                     logger.warning(f"No results from agent set stages for section: {section_title}")
                     critic_result = None
@@ -1358,14 +1601,20 @@ Actor Outputs from {len(actor_results)} GPT-4 models:
             dependencies = self._extract_dependencies_from_markdown(deduplicated_response)
             conflicts = self._extract_conflicts_from_markdown(deduplicated_response)
             test_procedures = self._extract_test_procedures_from_markdown(deduplicated_response)
-            
+
+            # Debug logging
+            logger.info(f"Section '{section_title}': Extracted {len(test_procedures)} test procedures, {len(dependencies)} dependencies, {len(conflicts)} conflicts")
+            if len(test_procedures) == 0:
+                logger.warning(f"NO TEST PROCEDURES EXTRACTED for '{section_title}'. First 800 chars of markdown:\n{deduplicated_response[:800]}")
+
             return CriticResult(
                 section_title=section_title,
                 synthesized_rules=deduplicated_response,
                 dependencies=dependencies,
                 conflicts=conflicts,
                 test_procedures=test_procedures,
-                actor_count=len(actor_results)
+                actor_count=len(actor_results),
+                source_section_key=section_title  # Preserve original section key
             )
             
         except Exception as e:
@@ -1808,23 +2057,111 @@ Create a comprehensive markdown document that consolidates all {len(section_resu
         return conflicts
     
     def _extract_test_procedures_from_markdown(self, markdown: str) -> List[Dict[str, Any]]:
-        """Extract test procedures from markdown format"""
+        """
+        Extract test procedures from markdown format.
+        Handles multiple formats: **Test Rules:**, ### Test Procedures, numbered lists, etc.
+
+        Extracts all fields from the JSON test plan schema:
+        - id, requirement_id, title, objective
+        - setup, steps, expected_results
+        - pass_criteria, fail_criteria
+        - type, priority, estimated_duration_minutes
+        """
         procedures = []
-        in_test_rules = False
-        
+        in_test_section = False
+        current_procedure = {}
+        current_steps = []
+
         for line in markdown.split('\n'):
-            if line.strip().startswith('**Test Rules:**'):
-                in_test_rules = True
+            line_stripped = line.strip()
+
+            # Start of test procedures section (multiple formats)
+            if any(pattern in line_stripped for pattern in [
+                '**Test Rules:**',
+                '**Test Procedures:**',
+                '### Test Procedures',
+                '## Test Procedures'
+            ]):
+                in_test_section = True
                 continue
-            elif line.strip().startswith('**') and in_test_rules:
-                break
-            elif in_test_rules and re.match(r'^\d+\.', line.strip()):
-                procedures.append({
-                    "id": f"test_{len(procedures)+1}",
-                    "description": line.strip(),
-                    "type": "functional"
-                })
-        
+
+            # End of test procedures section
+            if in_test_section and (line_stripped.startswith('**') or line_stripped.startswith('##')) and \
+               not any(pattern in line_stripped for pattern in ['Test Rules', 'Test Procedures', 'Test Procedure', 'Setup', 'Expected', 'Pass', 'Fail']):
+                in_test_section = False
+                if current_procedure and current_procedure.get("description"):
+                    if current_steps:
+                        current_procedure["steps"] = current_steps
+                    procedures.append(current_procedure)
+                    current_procedure = {}
+                    current_steps = []
+                continue
+
+            # Extract numbered test procedures
+            if in_test_section:
+                # Match numbered items: "1. ", "1) ", etc.
+                numbered_match = re.match(r'^(\d+)[\.\)]\s+(.+)$', line_stripped)
+                if numbered_match:
+                    # Save previous procedure if exists
+                    if current_procedure and current_procedure.get("description"):
+                        if current_steps:
+                            current_procedure["steps"] = current_steps
+                        procedures.append(current_procedure)
+                        current_steps = []
+
+                    # Start new procedure
+                    test_num = numbered_match.group(1)
+                    description = numbered_match.group(2)
+                    current_procedure = {
+                        "id": f"TP-{test_num}",
+                        "requirement_id": f"REQ-{test_num}",
+                        "title": description[:100],  # First 100 chars as title
+                        "objective": description,
+                        "description": description,
+                        "setup": "",
+                        "steps": [],
+                        "expected_results": "",
+                        "pass_criteria": "",
+                        "fail_criteria": "",
+                        "type": "functional",
+                        "priority": "medium",
+                        "estimated_duration_minutes": 30
+                    }
+                # Look for specific field markers
+                elif current_procedure:
+                    # Setup field
+                    if line_stripped.lower().startswith('setup:') or line_stripped.lower().startswith('**setup:**'):
+                        setup_text = re.sub(r'^\*?\*?setup:?\*?\*?\s*', '', line_stripped, flags=re.IGNORECASE)
+                        current_procedure["setup"] = setup_text
+                    # Expected results field
+                    elif line_stripped.lower().startswith('expected') or line_stripped.lower().startswith('**expected'):
+                        expected_text = re.sub(r'^\*?\*?expected\s*results?:?\*?\*?\s*', '', line_stripped, flags=re.IGNORECASE)
+                        current_procedure["expected_results"] = expected_text
+                    # Pass criteria field
+                    elif line_stripped.lower().startswith('pass') or line_stripped.lower().startswith('**pass'):
+                        pass_text = re.sub(r'^\*?\*?pass\s*criteria?:?\*?\*?\s*', '', line_stripped, flags=re.IGNORECASE)
+                        current_procedure["pass_criteria"] = pass_text
+                    # Fail criteria field
+                    elif line_stripped.lower().startswith('fail') or line_stripped.lower().startswith('**fail'):
+                        fail_text = re.sub(r'^\*?\*?fail\s*criteria?:?\*?\*?\s*', '', line_stripped, flags=re.IGNORECASE)
+                        current_procedure["fail_criteria"] = fail_text
+                    # Sub-steps (lettered or bulleted)
+                    elif re.match(r'^[a-z]\)|^-\s|^•\s', line_stripped):
+                        step_text = re.sub(r'^[a-z]\)\s*|^-\s*|^•\s*', '', line_stripped)
+                        if step_text:
+                            current_steps.append(step_text)
+                    # Continuation of current procedure description
+                    elif line_stripped and not line_stripped.startswith('-'):
+                        current_procedure["description"] += " " + line_stripped
+                        current_procedure["objective"] = current_procedure["description"]
+
+        # Add last procedure if exists
+        if current_procedure and current_procedure.get("description"):
+            if current_steps:
+                current_procedure["steps"] = current_steps
+            procedures.append(current_procedure)
+
+        logger.info(f"Extracted {len(procedures)} test procedures from markdown")
         return procedures
     
     def _cleanup_pipeline(self, pipeline_id: str):
@@ -2262,57 +2599,42 @@ This test plan was generated in fallback mode due to section extraction issues.
                 "document_name": test_plan.title
             }
 
-            # Save to ChromaDB
-            payload = {
-                "collection_name": target_collection,
-                "documents": [doc_content],
-                "metadatas": [metadata],
-                "ids": [doc_id]
-            }
+            # Save to ChromaDB using direct client access
+            logger.info(f"Saving to ChromaDB collection '{target_collection}' with doc_id: {doc_id}")
+            logger.info(f"Document metadata: {metadata}")
 
-            logger.info(f"Sending save request to ChromaDB: {self.fastapi_url}/api/vectordb/documents/add")
-            logger.info(f"Payload metadata: {metadata}")
+            from integrations.chromadb_client import get_chroma_client
+            chroma_client = get_chroma_client()
+            collection = chroma_client.get_or_create_collection(target_collection)
 
-            response = requests.post(
-                f"{self.fastapi_url}/api/vectordb/documents/add",
-                json=payload,
-                timeout=30
+            # Add document directly
+            collection.add(
+                documents=[doc_content],
+                metadatas=[metadata],
+                ids=[doc_id]
             )
 
-            logger.info(f"ChromaDB response status: {response.status_code}")
+            logger.info(f"Saved multi-agent test plan to ChromaDB ({target_collection}): {doc_id}")
 
-            if response.ok:
-                logger.info(f"Saved multi-agent test plan to ChromaDB ({target_collection}): {doc_id}")
-                # Record generated doc in pipeline meta if pipeline_id provided
-                try:
-                    if pid:
-                        self._update_pipeline_metadata(pid, {
-                            "generated_document_id": doc_id,
-                            "collection": target_collection,
-                        })
-                        self.redis_client.zadd("pipeline:recent", {pid: time.time()})
-                except Exception as e:
-                    logger.warning(f"Failed to record generated doc in pipeline meta: {e}")
+            # Record generated doc in pipeline meta if pipeline_id provided
+            try:
+                if pid:
+                    self._update_pipeline_metadata(pid, {
+                        "generated_document_id": doc_id,
+                        "collection": target_collection,
+                    })
+                    self.redis_client.zadd("pipeline:recent", {pid: time.time()})
+            except Exception as e:
+                logger.warning(f"Failed to record generated doc in pipeline meta: {e}")
 
-                return {
-                    "document_id": doc_id,
-                    "collection_name": target_collection,
-                    "saved": True,
-                    "generated_at": metadata["generated_at"],
-                    "architecture": "multi_agent_gpt4"
-                }
-            else:
-                error_msg = f"Failed to save to ChromaDB: {response.status_code} - {response.text}"
-                logger.error(error_msg)
-                logger.error(f"Failed payload collection: {target_collection}, doc_id: {doc_id}")
-                return {"saved": False, "error": response.text, "status_code": response.status_code}
+            return {
+                "document_id": doc_id,
+                "collection_name": target_collection,
+                "saved": True,
+                "generated_at": metadata["generated_at"],
+                "architecture": "multi_agent_gpt4"
+            }
 
-        except requests.exceptions.RequestException as e:
-            error_msg = f"Network error saving to ChromaDB: {e}"
-            logger.error(error_msg)
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            return {"saved": False, "error": str(e), "error_type": "network"}
         except Exception as e:
             error_msg = f"Unexpected error saving to ChromaDB: {e}"
             logger.error(error_msg)
@@ -2328,28 +2650,15 @@ This test plan was generated in fallback mode due to section extraction issues.
             pass
 
     def _ensure_collection_exists(self, name: str):
-        """Ensure an arbitrary collection exists."""
+        """Ensure an arbitrary collection exists using direct ChromaDB client."""
         try:
-            list_response = requests.get(f"{self.fastapi_url}/api/vectordb/collections", timeout=10)
-            if list_response.ok:
-                collections = list_response.json().get("collections", [])
-                if name not in collections:
-                    logger.info(f"Collection '{name}' does not exist. Creating it...")
-                    create_response = requests.post(
-                        f"{self.fastapi_url}/api/vectordb/collection/create",
-                        params={"collection_name": name},
-                        timeout=10
-                    )
-                    if create_response.ok:
-                        logger.info(f"Successfully created collection '{name}'")
-                    else:
-                        logger.error(f"Failed to create collection '{name}': {create_response.status_code} - {create_response.text}")
-                        raise Exception(f"Collection creation failed: {create_response.text}")
-                else:
-                    logger.debug(f"Collection '{name}' already exists")
-            else:
-                logger.error(f"Failed to list collections: {list_response.status_code} - {list_response.text}")
-                raise Exception(f"Failed to verify collections: {list_response.text}")
+            from integrations.chromadb_client import get_chroma_client
+
+            chroma_client = get_chroma_client()
+            # get_or_create_collection will create if it doesn't exist
+            collection = chroma_client.get_or_create_collection(name)
+            logger.info(f"Collection '{name}' verified/created successfully")
+            return collection
         except Exception as e:
             logger.error(f"Unable to ensure collection {name}: {e}")
             raise

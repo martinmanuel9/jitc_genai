@@ -29,11 +29,11 @@ class AgentService:
             from services.llm_service import LLMService
             self.llm_service = LLMService()
             print("Using LLMService (same as Direct Chat)")
-            
-            # Test that it works
-            test_llm = self.llm_service.get_llm_service("gpt-4")
+
+            # Test that it works with a local model
+            test_llm = self.llm_service.get_llm_service("llama3.2:3b")
             print("LLMService connection verified")
-            
+
         except Exception as e:
             print(f"LLMService failed, falling back to llm_utils: {e}")
             self.llm_service = None

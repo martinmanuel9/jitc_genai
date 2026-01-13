@@ -23,6 +23,9 @@ from schemas.versioning import (
     CreateTestPlanVersionRequest,
     TestPlanVersionResponse,
     TestPlanVersionListResponse,
+    UpdateVersionStatusRequest,
+    CompareVersionsRequest,
+    CompareVersionsResponse,
     CreateTestCardRequest,
     UpdateTestCardRequest,
     TestCardResponse,
@@ -34,6 +37,8 @@ from schemas.versioning import (
     CreateDocumentVersionRequest,
     DocumentVersionResponse,
     DocumentVersionListResponse,
+    DeleteTestPlanResponse,
+    DeleteVersionResponse,
 )
 
 
@@ -158,6 +163,115 @@ async def create_test_plan_version(
     })
 
     return TestPlanVersionResponse.from_orm(version)
+
+
+@router.patch("/test-plans/{plan_id}/versions/{version_id}/status", response_model=TestPlanVersionResponse)
+async def update_version_status(
+    plan_id: int,
+    version_id: int,
+    request: UpdateVersionStatusRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Update the status of a test plan version
+
+    Business rules:
+    - Cannot demote published versions to draft or final
+    - Draft → Final → Published workflow
+    """
+    from models.versioning import VersionStatus
+
+    version_repo = TestPlanVersionRepository(db)
+    version = version_repo.get(version_id)
+
+    if not version or version.plan_id != plan_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
+
+    # Business rule: Cannot demote published versions
+    if hasattr(version, 'status'):
+        current_status = version.status.value if hasattr(version.status, 'value') else str(version.status)
+        if current_status == "published" and request.status.value != "published":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot demote published version to draft or final"
+            )
+
+    # Update status
+    updated = version_repo.update_by_id(version_id, {"status": request.status.value})
+    return TestPlanVersionResponse.from_orm(updated)
+
+
+@router.post("/test-plans/{plan_id}/versions/compare", response_model=CompareVersionsResponse)
+async def compare_versions(
+    plan_id: int,
+    request: CompareVersionsRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Compare two versions and generate Was/Is diff
+
+    Args:
+        plan_id: Test plan ID
+        request: Contains version_id_was and version_id_is
+
+    Returns:
+        Comparison results with differences and HTML preview
+    """
+    from services.version_comparison_service import VersionComparisonService
+
+    try:
+        comparison_service = VersionComparisonService(db)
+        result = comparison_service.compare_versions(
+            plan_id,
+            request.version_id_was,
+            request.version_id_is
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Comparison failed: {str(e)}")
+
+
+@router.get("/test-plans/{plan_id}/versions/{version_id_was}/export-comparison/{version_id_is}")
+async def export_comparison_docx(
+    plan_id: int,
+    version_id_was: int,
+    version_id_is: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Export Was/Is comparison as DOCX with track changes
+
+    Args:
+        plan_id: Test plan ID
+        version_id_was: Previous version ID
+        version_id_is: Current version ID
+
+    Returns:
+        DOCX file with track changes formatting
+    """
+    from services.version_comparison_service import VersionComparisonService
+    from fastapi.responses import StreamingResponse
+    import io
+
+    try:
+        comparison_service = VersionComparisonService(db)
+        docx_bytes = comparison_service.export_comparison_docx(
+            plan_id, version_id_was, version_id_is
+        )
+
+        return StreamingResponse(
+            io.BytesIO(docx_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f"attachment; filename=comparison_v{version_id_was}_to_v{version_id_is}.docx"
+            }
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Export failed: {str(e)}")
 
 
 # ---------------------------------------------------------------------------
@@ -328,3 +442,131 @@ async def create_document_version(request: CreateDocumentVersionRequest, db: Ses
     })
 
     return DocumentVersionResponse.from_orm(version)
+
+
+# ---------------------------------------------------------------------------
+# Delete Operations
+# ---------------------------------------------------------------------------
+
+@router.delete("/test-plans/{plan_id}", response_model=DeleteTestPlanResponse)
+async def delete_test_plan(plan_id: int, db: Session = Depends(get_db)):
+    """
+    Delete a test plan and all its versions.
+
+    This will:
+    1. Delete all test plan versions from PostgreSQL
+    2. Delete all associated ChromaDB documents
+    3. Delete the test plan record
+
+    Args:
+        plan_id: ID of the test plan to delete
+
+    Returns:
+        DeleteTestPlanResponse with deletion statistics
+    """
+    from integrations.chromadb_client import get_chroma_client
+
+    plan_repo = TestPlanRepository(db)
+    version_repo = TestPlanVersionRepository(db)
+
+    # Get the plan
+    plan = plan_repo.get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Test plan {plan_id} not found")
+
+    # Get all versions for this plan
+    versions = db.query(TestPlanVersion).filter(TestPlanVersion.plan_id == plan_id).all()
+    collection_name = plan.collection_name or "test_plan_drafts"
+
+    # Delete ChromaDB documents for all versions
+    chromadb_deleted = 0
+    try:
+        chroma_client = get_chroma_client()
+        collection = chroma_client.get_collection(collection_name)
+
+        for version in versions:
+            # Find all documents for this version
+            result = collection.get(where={"version_id": str(version.id)})
+            if result and result.get("ids"):
+                collection.delete(ids=result["ids"])
+                chromadb_deleted += len(result["ids"])
+
+    except Exception as e:
+        # Log error but don't fail the deletion
+        print(f"Warning: Failed to delete some ChromaDB documents: {e}")
+
+    # Delete all versions from PostgreSQL (cascade will handle this, but being explicit)
+    versions_count = len(versions)
+    for version in versions:
+        version_repo.delete(version)
+
+    # Delete the test plan (cascade delete will also remove versions)
+    plan_repo.delete(plan)
+
+    return DeleteTestPlanResponse(
+        success=True,
+        message=f"Test plan '{plan.title}' deleted successfully",
+        plan_id=plan_id,
+        versions_deleted=versions_count,
+        chromadb_documents_deleted=chromadb_deleted
+    )
+
+
+@router.delete("/test-plans/{plan_id}/versions/{version_id}", response_model=DeleteVersionResponse)
+async def delete_test_plan_version(plan_id: int, version_id: int, db: Session = Depends(get_db)):
+    """
+    Delete a specific test plan version.
+
+    This will:
+    1. Delete the version from PostgreSQL
+    2. Delete associated ChromaDB documents
+
+    Args:
+        plan_id: ID of the test plan
+        version_id: ID of the version to delete
+
+    Returns:
+        DeleteVersionResponse with deletion statistics
+    """
+    from integrations.chromadb_client import get_chroma_client
+
+    plan_repo = TestPlanRepository(db)
+    version_repo = TestPlanVersionRepository(db)
+
+    # Get the plan
+    plan = plan_repo.get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Test plan {plan_id} not found")
+
+    # Get the version
+    version = version_repo.get(version_id)
+    if not version or version.plan_id != plan_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Version {version_id} not found for plan {plan_id}")
+
+    collection_name = plan.collection_name or "test_plan_drafts"
+
+    # Delete ChromaDB documents for this version
+    chromadb_deleted = 0
+    try:
+        chroma_client = get_chroma_client()
+        collection = chroma_client.get_collection(collection_name)
+
+        # Find all documents for this version
+        result = collection.get(where={"version_id": str(version_id)})
+        if result and result.get("ids"):
+            collection.delete(ids=result["ids"])
+            chromadb_deleted = len(result["ids"])
+
+    except Exception as e:
+        # Log error but don't fail the deletion
+        print(f"Warning: Failed to delete some ChromaDB documents: {e}")
+
+    # Delete the version from PostgreSQL
+    version_repo.delete(version)
+
+    return DeleteVersionResponse(
+        success=True,
+        message=f"Version {version.version_number} deleted successfully",
+        version_id=version_id,
+        chromadb_documents_deleted=chromadb_deleted
+    )

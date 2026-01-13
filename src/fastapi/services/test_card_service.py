@@ -26,6 +26,15 @@ class TestCard:
     expected_results: str
     acceptance_criteria: str
     section_title: str
+    # New fields for test objectives, setup, and pass/fail criteria
+    objective: str = ""
+    setup: str = ""
+    pass_criteria: str = ""
+    fail_criteria: str = ""
+    # Review status workflow: DRAFT -> REVIEWED -> PUBLISHED
+    review_status: str = "DRAFT"
+    # Version binding to specific test plan version
+    test_plan_version_id: str = ""
     # Execution tracking (populated by users)
     executed: bool = False
     passed: bool = False
@@ -595,7 +604,8 @@ IMPORTANT:
         test_plan_id: str,
         test_plan_content: str,
         test_plan_title: str,
-        format: str = "markdown_table"
+        format: str = "markdown_table",
+        selected_procedures: List[Dict[str, str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Parse a test plan and generate individual test card documents.
@@ -606,6 +616,8 @@ IMPORTANT:
             test_plan_content: Full test plan markdown content
             test_plan_title: Title of the test plan
             format: Output format for test cards
+            selected_procedures: Optional list of dicts with section_id and procedure_id
+                               to filter which procedures to convert. If None, converts all.
 
         Returns:
             List of test card documents ready to save to ChromaDB
@@ -617,10 +629,44 @@ IMPORTANT:
 
         try:
             logger.info(f"Generating individual test cards from test plan: {test_plan_id}")
+            logger.info(f"Test plan content type: {type(test_plan_content)}, length: {len(test_plan_content) if test_plan_content else 0}")
 
-            # Parse test plan into sections
+            # Log first 500 chars of content for debugging
+            if test_plan_content:
+                logger.info(f"Test plan content preview: {test_plan_content[:500]}...")
+
+            # Parse test plan into sections (only reviewed sections)
             sections = self._parse_test_plan_into_sections(test_plan_content)
-            logger.info(f"Parsed test plan into {len(sections)} sections")
+            logger.info(f"Parsed test plan into {len(sections)} reviewed sections")
+
+            # Log available section IDs for debugging
+            available_section_ids = [s.get('section_id', f"section_{s.get('index', 0)}") for s in sections]
+            logger.info(f"Available section IDs in test plan: {available_section_ids[:10]}...")
+
+            # Build a set of selected (section_id, procedure_id) for quick lookup
+            selected_set = None
+            selected_sections = set()  # Sections selected for content-based generation
+            if selected_procedures:
+                selected_set = set()
+                logger.info(f"Processing {len(selected_procedures)} selected procedure entries from frontend")
+                for p in selected_procedures:
+                    section_id = p.get("section_id", "")
+                    procedure_id = p.get("procedure_id", "")
+                    logger.debug(f"  Selected: section_id='{section_id}', procedure_id='{procedure_id}'")
+                    if procedure_id == "section":
+                        # Section-level selection - include all procedures from this section
+                        selected_sections.add(section_id)
+                    else:
+                        selected_set.add((section_id, procedure_id))
+                logger.info(f"Filtering to {len(selected_set)} selected procedure(s): {list(selected_set)[:5]}...")
+                logger.info(f"Section-level selections: {len(selected_sections)} section(s): {list(selected_sections)[:5]}...")
+
+            # Check if we have any sections to process
+            if not sections:
+                raise ValueError(
+                    "No reviewed sections found in test plan. "
+                    "Please mark sections as 'Reviewed' in the Edit Test Plan tab before generating test cards."
+                )
 
             # Generate test cards for each section
             all_test_cards = []
@@ -630,12 +676,56 @@ IMPORTANT:
                 section_title = section.get('title', 'Unknown Section')
                 section_index = section.get('index', 0)
                 section_content = section.get('content', '')
+                section_id = section.get('section_id', f"section_{section_index}")
 
-                # Extract individual test procedures from section
-                test_procedures = self._extract_individual_tests(section_content)
-                logger.info(f"Section '{section_title}': extracted {len(test_procedures)} individual tests")
+                logger.info(f"Processing section: '{section_title}' (section_id={section_id})")
+
+                # Use pre-parsed test_procedures if available (from JSON format)
+                # Otherwise extract from content (markdown format)
+                if section.get('test_procedures'):
+                    # Convert JSON test procedures to the expected format
+                    test_procedures = self._convert_json_test_procedures(section['test_procedures'])
+                    proc_ids = [p.get('id', '') for p in test_procedures]
+                    logger.info(f"Section '{section_title}': using {len(test_procedures)} pre-parsed test procedures")
+                    logger.info(f"  Procedure IDs: {proc_ids[:10]}{'...' if len(proc_ids) > 10 else ''}")
+                else:
+                    # Extract individual test procedures from section content
+                    test_procedures = self._extract_individual_tests(section_content)
+                    logger.info(f"Section '{section_title}': extracted {len(test_procedures)} individual tests")
+
+                # If no test procedures found, create one from the section rules
+                if not test_procedures and section_content.strip():
+                    logger.info(f"Section '{section_title}': creating test from section rules")
+                    test_procedures = [{
+                        'title': section_title,
+                        'requirement_text': section_content[:500],
+                        'procedures': [f"Verify requirements in section: {section_title}"],
+                        'expected_results': 'All requirements met',
+                        'priority': 'medium',
+                        'id': f"proc_{section_index}_1"  # Generated procedure ID
+                    }]
 
                 for test_proc in test_procedures:
+                    # Get procedure ID for filtering
+                    procedure_id = test_proc.get('id', test_proc.get('procedure_id', ''))
+
+                    # Skip this procedure if we have a selection filter and it's not selected
+                    # Note: Use truthy check (not 'is not None') so empty sets don't trigger filtering
+                    if selected_set or selected_sections:
+                        # Check if this section is selected for content-based generation
+                        section_selected = section_id in selected_sections
+                        # Check if this specific procedure is selected
+                        procedure_selected = (section_id, procedure_id) in selected_set if selected_set else False
+
+                        # Debug logging for filtering
+                        logger.debug(f"Filtering check: section_id={section_id}, procedure_id={procedure_id}")
+                        logger.debug(f"  section_selected={section_selected}, procedure_selected={procedure_selected}")
+
+                        if not section_selected and not procedure_selected:
+                            logger.debug(f"Skipping unselected procedure: {section_id}/{procedure_id}")
+                            continue
+                        else:
+                            logger.info(f"Including selected procedure: {section_id}/{procedure_id}")
                     # Generate unique test card ID
                     test_id = f"TC-{test_card_counter:03d}"
                     card_id = f"testcard_{test_plan_id}_{test_id}_{uuid.uuid4().hex[:8]}"
@@ -646,9 +736,10 @@ IMPORTANT:
                         "document_name": f"{test_id} {test_proc.get('title', 'Test')}",
                         "content": self._format_test_card_content(test_proc, test_id, format),
                         "metadata": {
-                            # Link to test plan
+                            # Link to test plan (with version binding)
                             "test_plan_id": test_plan_id,
                             "test_plan_title": test_plan_title,
+                            "test_plan_version_id": test_plan_id,  # Version binding - cards are bound to specific test plan version
                             "section_title": section_title,
                             "section_index": section_index,
 
@@ -658,11 +749,20 @@ IMPORTANT:
                             "requirement_id": test_proc.get('requirement_id', ''),
                             "requirement_text": test_proc.get('requirement_text', ''),
 
+                            # Test objective and setup (NEW - from JSON test plan)
+                            "objective": test_proc.get('objective', ''),
+                            "setup": test_proc.get('setup', ''),
+
                             # Test details
                             "procedures": json.dumps(test_proc.get('procedures', [])),
                             "expected_results": test_proc.get('expected_results', ''),
                             "acceptance_criteria": test_proc.get('acceptance_criteria', ''),
+                            "pass_criteria": test_proc.get('pass_criteria', ''),
+                            "fail_criteria": test_proc.get('fail_criteria', ''),
                             "dependencies": json.dumps(test_proc.get('dependencies', [])),
+
+                            # Review status workflow: DRAFT -> REVIEWED -> PUBLISHED
+                            "review_status": "DRAFT",
 
                             # Execution tracking
                             "execution_status": "not_executed",
@@ -743,7 +843,7 @@ IMPORTANT:
                 documents.append(card["content"])
                 metadatas.append(card["metadata"])
 
-            # Save to ChromaDB
+            # Save to ChromaDB using upsert (handles both new and existing cards)
             payload = {
                 "collection_name": collection_name,
                 "documents": documents,
@@ -751,14 +851,25 @@ IMPORTANT:
                 "ids": ids
             }
 
+            # Try upsert first (preferred - handles existing cards)
             response = requests.post(
-                f"{fastapi_url}/api/vectordb/documents/add",
+                f"{fastapi_url}/api/vectordb/documents/upsert",
                 json=payload,
                 timeout=60
             )
 
+            # Fallback to add if upsert endpoint doesn't exist
+            if response.status_code == 404:
+                logger.info("Upsert endpoint not found, falling back to add")
+                response = requests.post(
+                    f"{fastapi_url}/api/vectordb/documents/add",
+                    json=payload,
+                    timeout=60
+                )
+
             if response.ok:
-                logger.info(f"Successfully saved {len(test_cards)} test cards to ChromaDB")
+                logger.info(f"Successfully saved {len(test_cards)} test cards to ChromaDB collection '{collection_name}'")
+                logger.info(f"Saved test card IDs: {ids[:5]}{'...' if len(ids) > 5 else ''}")
                 return {
                     "saved": True,
                     "count": len(test_cards),
@@ -781,21 +892,84 @@ IMPORTANT:
 
     def _parse_test_plan_into_sections(self, content: str) -> List[Dict[str, Any]]:
         """
-        Parse test plan markdown into sections (optimized for large documents).
+        Parse test plan into sections. Handles both JSON and markdown formats.
+        Only returns sections that have been marked as reviewed.
 
         Args:
-            content: Test plan markdown content
+            content: Test plan content (JSON or markdown)
 
         Returns:
-            List of sections with title, index, and content (max 50 sections)
+            List of reviewed sections with title, index, and content (max 50 sections)
         """
+        MAX_SECTIONS = 50
+
+        # First, try to parse as JSON (new format)
+        try:
+            parsed = json.loads(content)
+            logger.info(f"Successfully parsed content as JSON. Keys: {list(parsed.keys()) if isinstance(parsed, dict) else 'not a dict'}")
+            if isinstance(parsed, dict) and "test_plan" in parsed:
+                json_sections = parsed.get("test_plan", {}).get("sections", [])
+                if json_sections:
+                    logger.info(f"Parsed {len(json_sections)} sections from JSON test plan")
+
+                    # Only return reviewed sections
+                    reviewed_count = sum(1 for s in json_sections if s.get("reviewed", False))
+                    logger.info(f"Found {reviewed_count} reviewed sections out of {len(json_sections)} total")
+
+                    if reviewed_count == 0:
+                        logger.warning("No sections have been reviewed. Test cards can only be generated for reviewed sections.")
+                        return []  # Return empty - no fallback to all sections
+
+                    sections = []
+                    for idx, s in enumerate(json_sections[:MAX_SECTIONS]):
+                        is_reviewed = s.get("reviewed", False)
+
+                        # Only include reviewed sections
+                        if not is_reviewed:
+                            logger.debug(f"Skipping unreviewed section: {s.get('section_title', 'Unknown')}")
+                            continue
+
+                        # Build content from synthesized_rules and test_procedures
+                        content_parts = []
+                        if s.get("synthesized_rules"):
+                            content_parts.append(f"**Test Rules:**\n{s.get('synthesized_rules')}")
+
+                        # Include test_procedures if available
+                        test_procs = s.get("test_procedures", [])
+                        if test_procs:
+                            content_parts.append("\n**Test Procedures:**")
+                            for i, proc in enumerate(test_procs, 1):
+                                if isinstance(proc, dict):
+                                    proc_title = proc.get("title", f"Test {i}")
+                                    proc_obj = proc.get("objective", "")
+                                    content_parts.append(f"{i}. {proc_title}: {proc_obj}")
+                                elif isinstance(proc, str):
+                                    content_parts.append(f"{i}. {proc}")
+
+                        sections.append({
+                            'title': s.get('section_title', f'Section {idx + 1}')[:200],
+                            'index': idx,  # 0-indexed to match frontend
+                            'section_id': s.get('section_id', f'section_{idx}'),  # 0-indexed fallback to match frontend
+                            'content': '\n'.join(content_parts),
+                            'test_procedures': test_procs,  # Keep original for direct use
+                            'source_page': s.get('source_page'),
+                            'heading_level': s.get('heading_level')
+                        })
+                    logger.info(f"Returning {len(sections)} sections from JSON parsing")
+                    return sections
+                else:
+                    logger.warning("JSON test_plan has no sections array or it's empty")
+            else:
+                logger.warning(f"JSON parsed but no 'test_plan' key found. Keys: {list(parsed.keys()) if isinstance(parsed, dict) else 'not a dict'}")
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.info(f"Content is not valid JSON, falling back to markdown parsing. Error: {e}")
+
+        # Fall back to markdown parsing
+        logger.info("Using markdown parsing for test plan content")
         sections = []
         lines = content.split('\n')
         current_section = None
         section_index = 0
-
-        # Limit total sections to prevent excessive processing
-        MAX_SECTIONS = 50
 
         for line in lines:
             # Check for section headers (## Section Title or # Section Title)
@@ -810,7 +984,7 @@ IMPORTANT:
 
                 section_index += 1
                 current_section = {
-                    'title': line.replace('##', '').replace('#', '').strip()[:200],  # Limit title length
+                    'title': line.replace('##', '').replace('#', '').strip()[:200],
                     'index': section_index,
                     'content': ''
                 }
@@ -821,8 +995,91 @@ IMPORTANT:
         if current_section and len(sections) < MAX_SECTIONS:
             sections.append(current_section)
 
-        logger.info(f"Parsed {len(sections)} sections from test plan")
+        logger.info(f"Parsed {len(sections)} sections from markdown test plan")
+
+        # No fallback - if no sections found, return empty list
+        # Test cards can only be generated for properly formatted and reviewed content
+        if not sections:
+            logger.warning("No sections found in markdown content. Ensure test plan has proper section headers (## or #).")
+
         return sections
+
+    def _convert_json_test_procedures(self, test_procedures: List) -> List[Dict[str, Any]]:
+        """
+        Convert JSON test procedures from test plan to the format expected by test card generation.
+
+        Maps all fields from the JSON test plan schema including:
+        - Test identification (id, requirement_id, title)
+        - Test objectives and setup
+        - Test steps/procedures
+        - Expected results and pass/fail criteria
+        - Metadata (type, priority, duration, dependencies)
+
+        Args:
+            test_procedures: List of test procedures from JSON test plan
+
+        Returns:
+            List of test procedure dicts with standardized format
+        """
+        converted = []
+        for proc in test_procedures:
+            if isinstance(proc, dict):
+                # Extract steps - handle both 'steps' and 'procedures' keys
+                steps = proc.get('steps', [])
+                if not steps:
+                    steps = proc.get('procedures', [])
+                if isinstance(steps, str):
+                    steps = [steps]
+
+                # Build acceptance criteria from pass_criteria if not explicitly set
+                acceptance_criteria = proc.get('acceptance_criteria', '')
+                if not acceptance_criteria and proc.get('pass_criteria'):
+                    acceptance_criteria = f"Pass: {proc.get('pass_criteria')}"
+                    if proc.get('fail_criteria'):
+                        acceptance_criteria += f" | Fail: {proc.get('fail_criteria')}"
+
+                converted.append({
+                    # Test identification - preserve original id for filtering
+                    'id': proc.get('id', ''),
+                    'title': proc.get('title', 'Untitled Test'),
+                    'requirement_id': proc.get('requirement_id', proc.get('id', '')),
+
+                    # Test objective and setup (from JSON test plan)
+                    'objective': proc.get('objective', ''),
+                    'requirement_text': proc.get('objective', proc.get('description', '')),
+                    'setup': proc.get('setup', ''),
+
+                    # Test procedures/steps
+                    'procedures': steps if steps else ['Execute test as per specification'],
+
+                    # Expected results and criteria
+                    'expected_results': proc.get('expected_results', ''),
+                    'pass_criteria': proc.get('pass_criteria', ''),
+                    'fail_criteria': proc.get('fail_criteria', ''),
+                    'acceptance_criteria': acceptance_criteria,
+
+                    # Metadata
+                    'test_type': proc.get('type', proc.get('test_type', 'functional')),
+                    'category': proc.get('category', ''),
+                    'priority': proc.get('priority', 'medium'),
+                    'estimated_duration': proc.get('estimated_duration_minutes', proc.get('estimated_duration', 30)),
+                    'dependencies': proc.get('dependencies', [])
+                })
+            elif isinstance(proc, str):
+                # Simple string procedure
+                converted.append({
+                    'title': proc[:100],
+                    'objective': proc,
+                    'requirement_text': proc,
+                    'setup': '',
+                    'procedures': [proc],
+                    'expected_results': '',
+                    'pass_criteria': '',
+                    'fail_criteria': '',
+                    'acceptance_criteria': '',
+                    'priority': 'medium'
+                })
+        return converted
 
     def _extract_individual_tests(self, section_content: str) -> List[Dict[str, Any]]:
         """
@@ -1088,15 +1345,57 @@ IMPORTANT:
         return dependencies[:3]
 
     def _format_test_card_content(self, test_proc: Dict[str, Any], test_id: str, format: str) -> str:
-        """Format test card content based on format type"""
+        """
+        Format test card content based on format type.
+        Includes all fields: objective, setup, procedures, expected results, pass/fail criteria.
+        """
         if format == "markdown_table":
+            # Enhanced markdown format with all fields
             procedures_text = "<br>".join([f"{i+1}) {p}" for i, p in enumerate(test_proc.get('procedures', []))])
             deps_text = "<br>".join(test_proc.get('dependencies', [])) if test_proc.get('dependencies') else "None"
 
-            return f"""| Test ID | Test Title | Procedures | Expected Results | Acceptance Criteria | Dependencies | Executed | Pass | Fail | Notes |
-|---------|------------|------------|------------------|---------------------|--------------|----------|------|------|-------|
-| {test_id} | {test_proc.get('title', 'Test')} | {procedures_text} | {test_proc.get('expected_results', '')} | {test_proc.get('acceptance_criteria', '')} | {deps_text} | () | () | () | |
-"""
+            # Build comprehensive content with all fields
+            content_parts = []
+            content_parts.append(f"## {test_id}: {test_proc.get('title', 'Test')}\n")
+
+            # Test Objective
+            if test_proc.get('objective'):
+                content_parts.append(f"**Objective:** {test_proc.get('objective')}\n")
+
+            # Test Setup
+            if test_proc.get('setup'):
+                content_parts.append(f"**Setup:** {test_proc.get('setup')}\n")
+
+            # Test Procedures
+            content_parts.append("**Procedures:**\n")
+            for i, proc in enumerate(test_proc.get('procedures', []), 1):
+                content_parts.append(f"{i}. {proc}\n")
+
+            # Expected Results
+            if test_proc.get('expected_results'):
+                content_parts.append(f"\n**Expected Results:** {test_proc.get('expected_results')}\n")
+
+            # Pass/Fail Criteria
+            if test_proc.get('pass_criteria'):
+                content_parts.append(f"**Pass Criteria:** {test_proc.get('pass_criteria')}\n")
+            if test_proc.get('fail_criteria'):
+                content_parts.append(f"**Fail Criteria:** {test_proc.get('fail_criteria')}\n")
+
+            # Acceptance Criteria (if different from pass/fail)
+            if test_proc.get('acceptance_criteria') and test_proc.get('acceptance_criteria') != test_proc.get('pass_criteria'):
+                content_parts.append(f"**Acceptance Criteria:** {test_proc.get('acceptance_criteria')}\n")
+
+            # Dependencies
+            if test_proc.get('dependencies'):
+                content_parts.append(f"**Dependencies:** {deps_text}\n")
+
+            # Execution tracking table
+            content_parts.append("\n| Executed | Pass | Fail | Notes |\n")
+            content_parts.append("|----------|------|------|-------|\n")
+            content_parts.append("| ( ) | ( ) | ( ) | |\n")
+
+            return "".join(content_parts)
+
         elif format == "json":
             return json.dumps(test_proc, indent=2)
         else:

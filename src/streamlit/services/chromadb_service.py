@@ -12,7 +12,7 @@ class ChromaDBService:
     def get_collections(self) -> List[str]:
         response = self.client.get(
             f"{self.endpoints.vectordb}/collections",
-            timeout=10
+            timeout=60
         )
         return response.get('collections', [])
 
@@ -24,7 +24,7 @@ class ChromaDBService:
         response = self.client.post(
             f"{self.endpoints.vectordb}/collection/create",
             params={'collection_name': name},
-            timeout=30
+            timeout=60
         )
         return response
 
@@ -32,7 +32,7 @@ class ChromaDBService:
         response = self.client.delete(
             f"{self.endpoints.vectordb}/collection",
             params={'collection_name': name},
-            timeout=30
+            timeout=60
         )
         return response
 
@@ -128,7 +128,7 @@ class ChromaDBService:
             f"{self.endpoints.vectordb}/documents/upload-and-process",
             files=files_data,
             params=params,
-            timeout=300
+            timeout=60
         )
 
         return response
@@ -136,7 +136,7 @@ class ChromaDBService:
     def get_job_status(self, job_id: str) -> Dict[str, Any]:
         response = self.client.get(
             f"{self.endpoints.vectordb}/jobs/{job_id}",
-            timeout=10
+            timeout=60
         )
         return response
 
@@ -148,7 +148,7 @@ class ChromaDBService:
         response = self.client.get(
             f"{self.endpoints.vectordb}/documents/reconstruct/{document_id}",
             params={'collection_name': collection_name},
-            timeout=300
+            timeout=60
         )
         return response
 
@@ -161,7 +161,7 @@ class ChromaDBService:
         response = self.client.post(
             f"{self.endpoints.vectordb}/ingest-url",
             data=payload,
-            timeout=120
+            timeout=60
         )
         return response
 

@@ -5,7 +5,23 @@
       "Bash(docker stop:*)",
       "Bash(docker start:*)",
       "Bash(curl:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(find:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker restart:*)",
+      "Bash(docker logs:*)",
+      "Bash(docker cp:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker inspect:*)",
+      "Bash(docker compose build:*)",
+      "Bash(docker compose:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(poetry lock:*)",
+      "Bash(python test_heading_extraction.py:*)",
+      "Bash(claude --chrome \"http://localhost:8501\" --prompt \"Navigate to the JSON Test Plan Generator or side-by-side editor page. Look for the test plan editing interface. Take a screenshot and describe what you see - particularly the layout, page slider location, section selection, and overall workflow complexity.\")",
+      "Bash(pip search:*)",
+      "Bash(pip index:*)",
+      "Bash(python -m py_compile:*)"
     ]
   }
 }

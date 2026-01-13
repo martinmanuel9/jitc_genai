@@ -97,15 +97,17 @@ class DocumentService:
         agent_service: AgentService,
         llm_service: LLMService,
         chroma_url: str,
+        fastapi_url: str,
         agent_api_url: str,
     ):
         self.rag = rag_service
         self.agent = agent_service
         self.llm = llm_service
         self.chroma_url = chroma_url.rstrip("/")
+        self.fastapi_url = fastapi_url.rstrip("/")
         self.agent_api = agent_api_url.rstrip("/")
         # Initialize multi-agent test plan service
-        self.multi_agent_test_plan_service = MultiAgentTestPlanService(llm_service, chroma_url, agent_api_url)
+        self.multi_agent_test_plan_service = MultiAgentTestPlanService(llm_service, chroma_url, fastapi_url)
         # Token encoder for counting tokens
         if TIKTOKEN_AVAILABLE:
             try:
@@ -179,7 +181,7 @@ class DocumentService:
                             cached = self._cache_get_reconstructed(coll, doc_id)
                             if cached is None:
                                 r = requests.get(
-                                    f"{self.chroma_url}/documents/reconstruct/{doc_id}",
+                                    f"{self.fastapi_url}/api/vectordb/documents/reconstruct/{doc_id}",
                                     params={"collection_name": coll},
                                     timeout=120,
                                 )
@@ -207,7 +209,7 @@ class DocumentService:
                     continue
 
                 # Get ALL documents from collection - no limits
-                resp = requests.get(f"{self.chroma_url}/documents", 
+                resp = requests.get(f"{self.fastapi_url}/api/vectordb/documents",
                                   params={"collection_name": coll}, timeout=120)
                 if not resp.ok:
                     print(f"ERROR: Failed to get documents from collection '{coll}': {resp.status_code} - {resp.text}")
@@ -290,19 +292,23 @@ class DocumentService:
                     return 0
 
                 def process_chunk_sections():
-                    """Process chunk-based sections"""
+                    """
+                    Process chunk-based sections preserving page numbers.
+                    Uses chunk_idx as page number (0-indexed chunks map to 1-indexed pages).
+                    """
                     if document_chunks and sectioning_strategy in ("auto", "by_chunks"):
                         for doc_name, chunks in document_chunks.items():
                             for chunk_idx, content in sorted(chunks.items()):
-                                group = (chunk_idx // max(1, chunks_per_section)) + 1
-                                key = f"{doc_name} - Chunk Group {group}"
+                                # Use chunk_idx as page number (chunk 0 = page 1)
+                                page_num = chunk_idx + 1
+                                key = f"{doc_name} - Page {page_num}"
                                 sections.setdefault(key, [])
                                 sections[key].append(content)
                         # join lists to strings
                         for key, vals in list(sections.items()):
                             if isinstance(vals, list):
                                 sections[key] = "\n\n".join(v.strip() for v in vals if v)
-                        return len([k for k in sections.keys() if "Chunk Group" in k])
+                        return len([k for k in sections.keys() if "Page" in k])
                     return 0
 
                 # Process metadata sections first
@@ -529,7 +535,7 @@ class DocumentService:
         return sections if sections else [document_text]
 
     def _fetch_templates(self, collection: str) -> List[str]:
-        resp = requests.get(f"{self.chroma_url}/documents",
+        resp = requests.get(f"{self.fastapi_url}/api/vectordb/documents",
                             params={"collection_name": collection})
         resp.raise_for_status()
         return resp.json().get("documents", [])
@@ -542,13 +548,6 @@ class DocumentService:
                 pieces += docs[:top_k]
         return "\n\n".join(pieces)
 
-    
-    def _fetch_templates(self, collection: str) -> List[str]:
-        resp = requests.get(f"{self.chroma_url}/documents",
-                            params={"collection_name": collection})
-        resp.raise_for_status()
-        return resp.json().get("documents", [])
-    
     def generate_test_plan(
         self,
         source_collections: Optional[List[str]] = None,
@@ -773,7 +772,7 @@ class DocumentService:
             try:
                 # Check if collection exists by listing collections
                 list_response = requests.get(
-                    f"{self.chroma_url}/collections",
+                    f"{self.fastapi_url}/api/vectordb/collections",
                     timeout=5
                 )
                 
@@ -783,7 +782,7 @@ class DocumentService:
                         # Collection doesn't exist, create it using the proper endpoint
                         print(f"Creating collection '{generated_collection}'...")
                         create_response = requests.post(
-                            f"{self.chroma_url}/collection/create",
+                            f"{self.fastapi_url}/api/vectordb/collection/create",
                             params={"collection_name": generated_collection},
                             timeout=10
                         )
@@ -824,7 +823,7 @@ class DocumentService:
             }
             
             response = requests.post(
-                f"{self.chroma_url}/documents/add",
+                f"{self.fastapi_url}/api/vectordb/documents/add",
                 json=payload,
                 timeout=30
             )

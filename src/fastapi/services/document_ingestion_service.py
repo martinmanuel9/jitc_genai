@@ -207,14 +207,12 @@ redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 PERSIST_DIR = os.getenv("PERSIST_DIRECTORY", "/chroma/chroma")
 
 # Feature flag for position-aware extraction and chunking
-USE_POSITION_AWARE = os.getenv("USE_POSITION_AWARE_EXTRACTION", "true").lower() == "true"
-
 logger.info("Document Ingestion Service initialized")
 logger.info(f"ChromaDB: {CHROMA_HOST}:{CHROMA_PORT}")
 logger.info(f"Primary embedding model: {EMBEDDING_MODEL_NAME}")
 logger.info(f"Fallback embedding model (Ollama): {OLLAMA_EMBEDDING_MODEL}")
 logger.info(f"Redis: {REDIS_URL}")
-logger.info(f"Position-aware extraction: {'ENABLED' if USE_POSITION_AWARE else 'DISABLED'}")
+logger.info("Heading-based chunking: ENABLED (default)")
 
 
 # =============================================================================
@@ -639,6 +637,234 @@ async def describe_images_for_pages(
         page["image_descriptions"] = descs
     return pages_data
 
+def extract_headings_from_text(text: str) -> List[Dict[str, Any]]:
+    """
+    Detect headings using multiple heuristics:
+    - Numbered sections (1., 1.1, 1.1.1)
+    - ALL CAPS lines
+    - Bold/underline markers
+
+    Returns list of heading dictionaries with:
+    - text: heading text
+    - level: heading level (1-3)
+    - number: section number if applicable
+    - char_offset: character offset in text
+    - line_number: line number
+    - parent: parent heading text if applicable
+    """
+    import re
+
+    headings = []
+    lines = text.split('\n')
+
+    # Track heading hierarchy
+    h1_pattern = re.compile(r'^\s*(\d+)\.\s+([A-Z].*)')
+    h2_pattern = re.compile(r'^\s*(\d+\.\d+)\s+(.*)')
+    h3_pattern = re.compile(r'^\s*(\d+\.\d+\.\d+)\s+(.*)')
+    caps_pattern = re.compile(r'^[A-Z\s]{10,}$')  # All caps, 10+ chars
+
+    char_offset = 0
+    parent_stack = []
+
+    for line_num, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            char_offset += len(line) + 1
+            continue
+
+        heading = None
+        level = None
+
+        # Check numbered sections (most specific first)
+        if h3_pattern.match(stripped):
+            match = h3_pattern.match(stripped)
+            heading = {"text": match.group(2), "level": 3, "number": match.group(1)}
+        elif h2_pattern.match(stripped):
+            match = h2_pattern.match(stripped)
+            heading = {"text": match.group(2), "level": 2, "number": match.group(1)}
+        elif h1_pattern.match(stripped):
+            match = h1_pattern.match(stripped)
+            heading = {"text": match.group(2), "level": 1, "number": match.group(1)}
+        elif caps_pattern.match(stripped):
+            heading = {"text": stripped, "level": 1, "number": None}
+
+        if heading:
+            # Update parent stack
+            while parent_stack and parent_stack[-1]["level"] >= heading["level"]:
+                parent_stack.pop()
+
+            heading.update({
+                "char_offset": char_offset,
+                "line_number": line_num,
+                "parent": parent_stack[-1]["text"] if parent_stack else None
+            })
+
+            parent_stack.append(heading)
+            headings.append(heading)
+
+        char_offset += len(line) + 1
+
+    return headings
+
+
+def extract_structured_chunks(page_text: str, page_num: int) -> List[Dict[str, Any]]:
+    """
+    Extract chunks preserving page → heading → body hierarchy.
+
+    Returns:
+        List of chunks with types: 'heading' or 'body_text'
+    """
+    chunks = []
+
+    # 1. Extract headings using pattern matching
+    headings = extract_headings_from_text(page_text)
+
+    if not headings:
+        # No headings found - create a single body chunk for the entire page
+        if page_text.strip():
+            chunks.append({
+                "chunk_type": "body_text",
+                "page_number": page_num,
+                "heading_text": "",
+                "heading_level": 0,
+                "parent_heading": "",
+                "content": page_text.strip(),
+                "start_char_offset": 0,
+                "end_char_offset": len(page_text)
+            })
+        return chunks
+
+    # 2. For each heading, create heading chunk + body chunk
+    for idx, heading in enumerate(headings):
+        # Heading chunk
+        heading_text = heading["text"]
+        if heading.get("number"):
+            heading_text = f"{heading['number']} {heading['text']}"
+
+        chunks.append({
+            "chunk_type": "heading",
+            "page_number": page_num,
+            "heading_text": heading_text,
+            "heading_level": heading["level"],
+            "heading_index_on_page": idx,
+            "content": heading_text,
+            "parent_heading": heading.get("parent", ""),
+            "start_char_offset": heading["char_offset"]
+        })
+
+        # Body text chunk (text between this heading and next)
+        start_offset = heading["char_offset"] + len(page_text[heading["char_offset"]:].split('\n', 1)[0]) + 1
+
+        # Find end offset (start of next heading or end of page)
+        if idx + 1 < len(headings):
+            end_offset = headings[idx + 1]["char_offset"]
+        else:
+            end_offset = len(page_text)
+
+        body_text = page_text[start_offset:end_offset].strip()
+
+        if body_text:
+            chunks.append({
+                "chunk_type": "body_text",
+                "page_number": page_num,
+                "parent_heading": heading_text,
+                "heading_text": heading_text,
+                "heading_level": heading["level"],
+                "content": body_text,
+                "start_char_offset": start_offset,
+                "end_char_offset": end_offset
+            })
+
+    return chunks
+
+
+def heading_based_chunking(
+    pdf_path: str,
+    document_id: str,
+    enable_vision: bool = True,
+    run_all_models: bool = False,
+    selected_models: set = None
+) -> tuple:
+    """
+    Extract chunks separated by heading and body text.
+
+    This function implements heading-based chunking as specified in the plan,
+    creating separate chunks for headings and their associated body text.
+
+    Args:
+        pdf_path: Path to the PDF file
+        document_id: Unique identifier for the document
+        enable_vision: Whether to enable vision models for image description
+        run_all_models: Whether to run all available vision models
+        selected_models: Set of selected vision model keys
+
+    Returns:
+        Tuple of (chunks, images) where:
+        - chunks: List of chunk dictionaries with heading/body separation
+        - images: List of all extracted images across pages
+    """
+    import pdfplumber
+
+    if selected_models is None:
+        selected_models = {"llava_7b"}
+
+    chunks = []
+    all_images = []
+    chunk_index = 0  # Track chunk index for downstream compatibility
+
+    logger.info(f"Starting heading-based chunking for {pdf_path}")
+
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages, start=1):
+                # Extract text from page
+                page_text = page.extract_text() or ""
+
+                if not page_text.strip():
+                    logger.warning(f"Page {page_num} has no extractable text")
+                    # Still create a minimal chunk to preserve page structure
+                    chunks.append({
+                        "chunk_type": "body_text",
+                        "page_number": page_num,
+                        "heading_text": "",
+                        "heading_level": 0,
+                        "parent_heading": "",
+                        "content": f"[Page {page_num} - no extractable text]",
+                        "start_char_offset": 0,
+                        "end_char_offset": 0,
+                        "document_id": document_id,
+                        "chunk_index": chunk_index,
+                        "images": [],
+                        "has_images": False
+                    })
+                    chunk_index += 1
+                    continue
+
+                # Extract structured chunks with headings
+                page_chunks = extract_structured_chunks(page_text, page_num)
+
+                logger.info(f"Page {page_num}: Extracted {len(page_chunks)} chunks "
+                           f"({sum(1 for c in page_chunks if c['chunk_type'] == 'heading')} headings)")
+
+                # Add document_id and chunk_index to each chunk
+                for chunk in page_chunks:
+                    chunk["document_id"] = document_id
+                    chunk["chunk_index"] = chunk_index
+                    chunk["images"] = []
+                    chunk["has_images"] = False
+                    chunk_index += 1
+
+                chunks.extend(page_chunks)
+
+        logger.info(f"Heading-based chunking completed: {len(chunks)} total chunks")
+
+    except Exception as e:
+        logger.error(f"Error in heading_based_chunking for {pdf_path}: {e}")
+        raise
+
+    return chunks, all_images
+
+
 def extract_and_store_images_from_file(file_content: bytes, filename: str, temp_dir: str, doc_id: str) -> List[Dict]:
     """Fixed image extraction from PDF with better error handling"""
     pages_data = []
@@ -805,7 +1031,7 @@ def extract_images_with_position_support(
     Returns:
         List of page data with images
     """
-    if use_positions and USE_POSITION_AWARE:
+    if use_positions:
         logger.info(f"Using position-aware extraction for {filename}")
         try:
             pages_data = extract_images_with_positions(
@@ -1319,75 +1545,26 @@ def create_chunks_with_position_support(
     Returns:
         List of chunk dictionaries
     """
-    # Check if we should use position-aware chunking
-    if use_positions and USE_POSITION_AWARE and ext == ".pdf":
-        logger.info(f"Using position-aware chunking for {fname}")
-        try:
-            # Use position-aware chunking from the new module
-            chunks = page_based_chunking_with_positions(
-                pages_data=pages_data,
-                document_name=fname
-            )
-            logger.info(f"Position-aware chunking created {len(chunks)} chunks for {fname}")
-            return chunks
-        except Exception as e:
-            logger.error(f"Position-aware chunking failed for {fname}, falling back to legacy: {e}")
-            # Fall through to legacy chunking
+    # Use heading-based chunking for PDFs (default and only option)
+    if ext == ".pdf":
+        logger.info(f"Using heading-based chunking for {fname}")
+        # Create temporary PDF file for pdfplumber
+        temp_pdf_path = os.path.join(tmp_dir, fname)
+        if not os.path.exists(temp_pdf_path):
+            with open(temp_pdf_path, 'wb') as f:
+                f.write(content)
 
-    # Legacy chunking logic
-    logger.info(f"Using legacy chunking for {fname}")
-
-    use_page_chunking = True if ext == ".pdf" else False
-
-    if use_page_chunking:
-        # Extract page texts and correlate with images
-        page_texts = extract_text_by_page(content, fname, tmp_dir)
-        page_text_map = {p["page"]: (p.get("text") or "") for p in page_texts}
-
-        chunks = []
-        for page in pages_data:
-            pg = page.get("page") or 0
-            pg_text = page_text_map.get(pg, "")
-            img_list = []
-            for img_path, desc in zip(page.get("images", []), page.get("image_descriptions", [])):
-                img_list.append({
-                    "filename": Path(img_path).name,
-                    "storage_path": img_path,
-                    "description": desc,
-                })
-            page_ocr_used = False
-            # OCR fallback if no text extracted
-            if enable_ocr and not (pg_text or "").strip() and img_list:
-                ocr_texts = []
-                for img in img_list:
-                    try:
-                        with Image.open(img["storage_path"]) as im:
-                            ocr_text = pytesseract.image_to_string(im)
-                            if ocr_text and ocr_text.strip():
-                                ocr_texts.append(ocr_text.strip())
-                    except Exception as e:
-                        logger.warning(f"OCR failed for image {img['filename']}: {e}")
-                if ocr_texts:
-                    pg_text = "\n".join(ocr_texts)
-                    page_ocr_used = True
-            # Ensure we have some minimal content to embed
-            if not (pg_text or "").strip():
-                pg_text = f"Page {pg}: [no extractable text]"
-            chunks.append({
-                "content": pg_text.strip(),
-                "chunk_index": max(0, int(pg) - 1),
-                "images": img_list,
-                "page_number": pg,
-                "section_type": "page",
-                "section_title": "",
-                "has_images": len(img_list) > 0,
-                "ocr_used": page_ocr_used,
-                "start_position": 0,
-                "end_position": len(pg_text or ""),
-            })
-        logger.info(f"Legacy page-based chunking created {len(chunks)} chunks for {fname}")
+        # Use heading-based chunking
+        chunks, _ = heading_based_chunking(
+            pdf_path=temp_pdf_path,
+            document_id=fname,
+            enable_vision=len(vision_models) > 0,
+            run_all_models=len(vision_models) > 1,
+            selected_models=set(vision_models)
+        )
+        logger.info(f"Heading-based chunking created {len(chunks)} chunks for {fname}")
     else:
-        # full-document processing for non-PDF files
+        # Full-document processing for non-PDF files
         doc_data = process_document_with_context_multi_model(
             file_content=content,
             filename=fname,
@@ -1399,7 +1576,7 @@ def create_chunks_with_position_support(
             vision_flags={m: (m in vision_models) for m in vision_models},
         )
 
-        # Structure-preserving processing → embed → insert
+        # Structure-preserving processing
         try:
             if use_structure_preserving_upload():
                 logger.info(f"Using structure-preserving upload for {fname}")
@@ -1576,8 +1753,18 @@ def run_ingest_job(
                             # New structure-preserving metadata - ensuring no None values
                             "section_title": c.get("section_title", ""),
                             "section_type": c.get("section_type", "chunk"),
-                            "page_number": c.get("page_number", -1),  # Use -1 instead of None
+                            "page_number": int(c.get("page_number", -1)),  # Force int, use -1 instead of None
                             "section_number": c.get("section_number", -1),  # Use -1 instead of None
+                            # NEW HEADING METADATA (Phase 1)
+                            "chunk_type": c.get("chunk_type", "page"),  # 'heading' or 'body_text' or 'page' (legacy)
+                            "heading_text": c.get("heading_text", ""),
+                            "heading_level": int(c.get("heading_level", 0)),
+                            "parent_heading": c.get("parent_heading", ""),
+                            "heading_index_on_page": int(c.get("heading_index_on_page", 0)),
+                            # Position information
+                            "start_char_offset": int(c.get("start_char_offset", 0)),
+                            "end_char_offset": int(c.get("end_char_offset", len(text))),
+                            # Image metadata
                             "has_images": c.get("has_images", False),
                             "image_count": len(c.get("images", [])),
                             "start_position": c.get("start_position", 0),

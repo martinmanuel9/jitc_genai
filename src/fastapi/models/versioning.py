@@ -2,6 +2,7 @@
 Versioning ORM models for documents, test plans, and test cards.
 """
 
+import enum
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column,
@@ -11,10 +12,18 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     UniqueConstraint,
+    Enum as SQLAlchemyEnum,
 )
 from sqlalchemy.orm import relationship
 
 from models.base import Base
+
+
+class VersionStatus(str, enum.Enum):
+    """Version status enumeration"""
+    DRAFT = "draft"
+    FINAL = "final"
+    PUBLISHED = "published"
 
 
 class TestPlan(Base):
@@ -58,6 +67,16 @@ class TestPlanVersion(Base):
     document_id = Column(String, nullable=False)
     based_on_version_id = Column(Integer, ForeignKey("test_plan_versions.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.now(timezone.utc), index=True)
+    status = Column(
+        SQLAlchemyEnum(VersionStatus, native_enum=True, values_callable=lambda x: [e.value for e in x]),
+        default=VersionStatus.DRAFT,
+        nullable=False
+    )
+    updated_at = Column(
+        DateTime,
+        default=datetime.now(timezone.utc),
+        onupdate=datetime.now(timezone.utc)
+    )
 
     plan = relationship("TestPlan", back_populates="versions")
     based_on_version = relationship("TestPlanVersion", remote_side=[id])

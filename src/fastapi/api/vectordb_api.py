@@ -228,6 +228,44 @@ def add_documents(req: DocumentAddRequest):
         raise HTTPException(status_code=500, detail=f"Error adding documents: {str(e)}")
 
 
+@vectordb_api_router.post("/documents/upsert")
+def upsert_documents(req: DocumentAddRequest):
+    """
+    Upsert documents - update if exists, add if not.
+    More reliable than delete + add for updating existing documents.
+    """
+    try:
+        # Check if the collection exists
+        existing_names = chroma_client().list_collections()
+
+        if req.collection_name not in existing_names:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Collection '{req.collection_name}' not found."
+            )
+
+        # Retrieve the collection
+        collection = chroma_client().get_collection(req.collection_name)
+
+        # Upsert documents (update if exists, add if not)
+        collection.upsert(
+            documents=req.documents,
+            ids=req.ids,
+            embeddings=req.embeddings,
+            metadatas=req.metadatas
+        )
+        return {
+            "collection": req.collection_name,
+            "upserted_count": len(req.documents),
+            "ids": req.ids
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error upserting documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error upserting documents: {str(e)}")
+
+
 class DocumentRemoveRequest(BaseModel):
     collection_name: str
     ids: list[str]
@@ -705,6 +743,103 @@ def reconstruct_document(document_id: str, collection_name: str = Query(...), re
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reconstructing document: {str(e)}")
+
+
+@vectordb_api_router.get("/documents/page-content")
+def get_page_content(
+    collection_name: str = Query(...),
+    document_id: str = Query(...),
+    page_number: int = Query(...)
+):
+    """
+    Get all content from a specific page, grouped by heading.
+
+    Returns headings in hierarchical order with body text.
+    Used for the side-by-side editor to display source document content.
+
+    Args:
+        collection_name: ChromaDB collection name
+        document_id: Document identifier
+        page_number: Page number (numeric, not string)
+
+    Returns:
+        JSON with page_number, document_id, headings array, and total_headings
+    """
+    try:
+        # Get the collection
+        collection = chroma_client().get_collection(name=collection_name)
+
+        # Query chunks for this page
+        # ChromaDB requires $and operator for compound conditions
+        # Try document_name first (new heading-based chunking), fall back to document_id
+        results = collection.get(
+            where={
+                "$and": [
+                    {"document_name": {"$eq": document_id}},  # document_id param is actually the filename
+                    {"page_number": {"$eq": page_number}}
+                ]
+            },
+            include=["documents", "metadatas"]
+        )
+
+        # If no results, try with document_id field (for legacy chunks)
+        if not results["ids"]:
+            results = collection.get(
+                where={
+                    "$and": [
+                        {"document_id": {"$eq": document_id}},
+                        {"page_number": {"$eq": page_number}}
+                    ]
+                },
+                include=["documents", "metadatas"]
+            )
+
+        if not results["ids"]:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No content found for page {page_number} in document {document_id}"
+            )
+
+        # Group by heading
+        from collections import defaultdict
+        headings = defaultdict(lambda: {"heading_chunk": None, "body_chunks": []})
+
+        for idx, meta in enumerate(results["metadatas"]):
+            meta = meta or {}  # Handle None metadata
+            heading_text = meta.get("parent_heading") or meta.get("heading_text", "")
+            chunk_type = meta.get("chunk_type", "page")
+
+            if chunk_type == "heading":
+                headings[heading_text]["heading_chunk"] = {
+                    "heading_text": heading_text,
+                    "heading_level": meta.get("heading_level", 1),
+                    "content": results["documents"][idx]
+                }
+            else:
+                headings[heading_text]["body_chunks"].append(results["documents"][idx])
+
+        # Build response
+        response_headings = []
+        for heading_text, data in sorted(headings.items()):
+            response_headings.append({
+                "heading_text": heading_text,
+                "heading_level": data["heading_chunk"]["heading_level"] if data["heading_chunk"] else 1,
+                "heading_content": data["heading_chunk"]["content"] if data["heading_chunk"] else heading_text,
+                "body_text": "\n\n".join(data["body_chunks"])
+            })
+
+        return {
+            "page_number": page_number,
+            "document_id": document_id,
+            "headings": response_headings,
+            "total_headings": len(response_headings)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting page content: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting page content: {str(e)}")
 
 
 @vectordb_api_router.get("/images/{image_filename}")

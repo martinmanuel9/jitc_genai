@@ -33,7 +33,8 @@ def generate_test_cards(
     job_id: str,
     test_plan_id: str,
     collection_name: str,
-    format: str
+    format: str,
+    selected_procedures: list = None
 ):
     """
     Celery task to generate test cards from a test plan.
@@ -44,6 +45,8 @@ def generate_test_cards(
         test_plan_id: ID of the test plan document
         collection_name: ChromaDB collection containing the test plan
         format: Output format for test cards
+        selected_procedures: List of dicts with section_id and procedure_id to filter.
+                            If None, generates all procedures.
 
     Returns:
         dict: Result summary with generated test cards
@@ -115,36 +118,66 @@ def generate_test_cards(
 
         logger.info(f"[{job_id}] Found test plan: {test_plan_title}")
 
-        # Update progress
+        # Count sections for progress tracking
+        total_sections = 0
+        try:
+            parsed = json.loads(test_plan_content)
+            if isinstance(parsed, dict) and "test_plan" in parsed:
+                sections = parsed.get("test_plan", {}).get("sections", [])
+                # Count only reviewed sections (test cards are only generated for reviewed)
+                total_sections = sum(1 for s in sections if s.get("reviewed", False))
+                logger.info(f"[{job_id}] Found {total_sections} reviewed sections to process")
+        except (json.JSONDecodeError, TypeError):
+            # Fallback for non-JSON content
+            total_sections = test_plan_content.count("## ")
+            logger.info(f"[{job_id}] Estimated {total_sections} sections from markdown headers")
+
+        # Update progress with section count
         redis_client.hset(f"testcard_job:{job_id}:meta", mapping={
             "test_plan_title": test_plan_title,
-            "progress_message": "Parsing test plan into sections...",
+            "total_sections": str(max(total_sections, 1)),  # At least 1 to avoid division by zero
+            "sections_processed": "0",
+            "progress_message": f"Parsing {total_sections} section(s) for test card generation...",
             "last_updated_at": datetime.now().isoformat()
         })
 
         self.update_state(
             state="PROGRESS",
-            meta={"status": "Parsing test plan into sections..."}
+            meta={"status": f"Parsing {total_sections} section(s)..."}
         )
 
-        # Generate test cards
+        # Generate test cards (pass selected_procedures for filtering)
         logger.info(f"[{job_id}] Generating test cards...")
+        if selected_procedures:
+            logger.info(f"[{job_id}] Filtering to {len(selected_procedures)} selected procedure(s)")
+
         test_cards = test_card_service.generate_test_cards_from_test_plan(
             test_plan_id=test_plan_id,
             test_plan_content=test_plan_content,
             test_plan_title=test_plan_title,
-            format=format
+            format=format,
+            selected_procedures=selected_procedures
         )
 
         if not test_cards:
-            raise Exception("No test procedures found in test plan")
+            raise Exception(
+                "No test cards could be generated from the test plan. "
+                "Test cards are only generated for sections marked as 'Reviewed'. "
+                "Please go to Tab 3 (Edit Test Plan), mark sections as reviewed using the checkbox, "
+                "and save before generating test cards."
+            )
 
         logger.info(f"[{job_id}] Generated {len(test_cards)} test card documents")
 
-        # Update progress
+        # Count unique sections in generated cards for progress
+        sections_in_cards = set(card["metadata"]["section_title"] for card in test_cards)
+        sections_completed = len(sections_in_cards)
+
+        # Update progress - sections complete, now saving
         redis_client.hset(f"testcard_job:{job_id}:meta", mapping={
             "test_cards_generated": str(len(test_cards)),
-            "progress_message": f"Saving {len(test_cards)} test cards to ChromaDB...",
+            "sections_processed": str(sections_completed),
+            "progress_message": f"Generated {len(test_cards)} test cards from {sections_completed} section(s). Saving to ChromaDB...",
             "last_updated_at": datetime.now().isoformat()
         })
 
@@ -182,10 +215,13 @@ def generate_test_cards(
         redis_client.hset(f"testcard_job:{job_id}:result", mapping=result_data)
         redis_client.expire(f"testcard_job:{job_id}:result", 604800)
 
-        # Update final status
+        # Update final status with complete counts
         redis_client.hset(f"testcard_job:{job_id}:meta", mapping={
             "status": "completed",
-            "progress_message": f"Successfully generated {len(test_cards)} test cards",
+            "sections_processed": str(sections_completed),
+            "total_sections": str(sections_completed),  # Match final count
+            "test_cards_generated": str(len(test_cards)),
+            "progress_message": f"Successfully generated {len(test_cards)} test cards from {sections_completed} section(s)",
             "completed_at": datetime.now().isoformat(),
             "last_updated_at": datetime.now().isoformat()
         })

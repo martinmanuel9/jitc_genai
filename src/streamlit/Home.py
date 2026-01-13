@@ -10,10 +10,20 @@ from components.healthcheck_sidebar import Healthcheck_Sidebar
 from components.direct_chat import Direct_Chat
 from components.json_test_plan_generator import JSON_Test_Plan_Generator
 from components.upload_documents import render_upload_component
+from components.json_test_plan_sidebyside_editor import render_sidebyside_editor
+from components.test_card_viewer import render_test_card_generator, render_test_card_executor
+from components.test_card_sidebyside_editor import render_test_card_sidebyside_editor
 from services.chromadb_service import chromadb_service
 
 torch.classes.__path__ = []
-nest_asyncio.apply()
+
+# Apply nest_asyncio if possible (skip for uvloop)
+try:
+    nest_asyncio.apply()
+except ValueError as e:
+    # uvloop doesn't support nest_asyncio patching, which is fine
+    if "uvloop" not in str(e):
+        raise
 
 # Configure logging to suppress benign WebSocket errors
 # These errors occur when users refresh/close the page during auto-refresh
@@ -68,9 +78,13 @@ workflow_tab, chat_tab = st.tabs(["Workflow", "Chat"])
 
 with workflow_tab:
     st.subheader("Workflow Steps")
-    step_upload, step_generate = st.tabs([
+    step_upload, step_generate, step_edit, step_generate_cards, step_edit_cards, step_execute_cards = st.tabs([
         "1. Upload Standards",
-        "2. Generate Test Plan (JSON)",
+        "2. Generate Test Plan",
+        "3. Edit Test Plan",
+        "4. Generate Test Cards",
+        "5. Edit Test Cards",
+        "6. Execute Test Cards"
     ])
 
     with step_upload:
@@ -90,6 +104,18 @@ with workflow_tab:
 
     with step_generate:
         JSON_Test_Plan_Generator()
+
+    with step_edit:
+        render_sidebyside_editor()
+
+    with step_generate_cards:
+        render_test_card_generator()
+
+    with step_edit_cards:
+        render_test_card_sidebyside_editor()
+
+    with step_execute_cards:
+        render_test_card_executor()
 
 with chat_tab:
     Direct_Chat()
