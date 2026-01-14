@@ -525,7 +525,8 @@ Write-Log ">>> Building base-poetry-deps..." -Color Cyan
 Write-Host ""
 
 $baseBuildStart = Get-Date
-docker compose build base-poetry-deps 2>&1 | ForEach-Object {
+# Use --no-cache to ensure all dependencies are freshly installed from poetry.lock
+docker compose build --no-cache base-poetry-deps 2>&1 | ForEach-Object {
     Write-Host $_
     Add-Content -Path $LogFile -Value $_ -ErrorAction SilentlyContinue
 }
