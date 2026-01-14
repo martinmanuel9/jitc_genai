@@ -336,7 +336,7 @@ Write-Host ""
 Write-Host ">>> EMBEDDING MODELS (Required for RAG) <<<" -ForegroundColor Yellow
 Write-Host ""
 
-if (Pull-Model "snowflake-arctic-embed-m" "Snowflake Arctic Embed M - Document embeddings" "1.4 GB") { $successCount++ } else { $failCount++ }
+if (Pull-Model "snowflake-arctic-embed2" "Snowflake Arctic Embed 2.0 - Document embeddings" "1.7 GB") { $successCount++ } else { $failCount++ }
 
 # ============================================================
 # VISION MODELS - For image and document analysis

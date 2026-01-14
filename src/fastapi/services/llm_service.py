@@ -26,10 +26,10 @@ class LLMService:
         """
         self.db = db
         self.chromadb_dir = os.getenv("CHROMADB_PERSIST_DIRECTORY", "/app/chroma_db_data")
-        # Use Ollama embeddings (snowflake-arctic-embed-m) instead of HuggingFace
+        # Use Ollama embeddings (snowflake-arctic-embed2) instead of HuggingFace
         ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
         self.embedding_function = OllamaEmbeddings(
-            model="snowflake-arctic-embed-m",
+            model="snowflake-arctic-embed2",
             base_url=ollama_url
         )
         self.n_results = int(os.getenv("N_RESULTS", "3"))

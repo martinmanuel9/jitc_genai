@@ -45,7 +45,7 @@ class RAGService:
 
         # Embedding function using Ollama (Snowflake Arctic Embed - local model)
         ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
-        ollama_embedding_model = os.getenv("OLLAMA_EMBEDDING_MODEL", "snowflake-arctic-embed:latest")
+        ollama_embedding_model = os.getenv("OLLAMA_EMBEDDING_MODEL", "snowflake-arctic-embed2")
         self.embedding_function = OllamaEmbeddings(
             model=ollama_embedding_model,
             base_url=ollama_url

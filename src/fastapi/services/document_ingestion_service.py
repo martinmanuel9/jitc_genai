@@ -133,7 +133,7 @@ class HybridEmbeddingModel:
         self.ollama_url = os.getenv("OLLAMA_URL", "http://ollama:11434")
         self.ollama_model_name = os.getenv(
             "OLLAMA_EMBEDDING_MODEL",
-            "snowflake-arctic-embed:latest"
+            "snowflake-arctic-embed2"
         )
 
         # Try to initialize HuggingFace model
@@ -195,7 +195,7 @@ EMBEDDING_MODEL_NAME = os.getenv(
 )
 OLLAMA_EMBEDDING_MODEL = os.getenv(
     "OLLAMA_EMBEDDING_MODEL",
-    "snowflake-arctic-embed:latest"
+    "snowflake-arctic-embed2"
 )
 embedding_model = HybridEmbeddingModel()
 

@@ -326,7 +326,7 @@ switch ($Mode) {
         Invoke-PullModel "llama3.2:1b" "Meta's smallest (1.3 GB)"
         Invoke-PullModel "llama3.2:3b" "Meta's balanced (2 GB)"
         Invoke-PullModel "phi3:mini" "Microsoft's efficient (2.3 GB)"
-        Invoke-PullModel "snowflake-arctic-embed" "Snowflake embeddings (1 GB)"
+        Invoke-PullModel "snowflake-arctic-embed2" "Snowflake embeddings v2 (1.7 GB)"
     }
 
     "recommended" {
@@ -366,7 +366,6 @@ switch ($Mode) {
         Invoke-PullModel "phi3:medium" "Microsoft Phi-3 Medium (7.9 GB)"
 
         # Snowflake Embeddings
-        Invoke-PullModel "snowflake-arctic-embed" "Snowflake Arctic Embed (1 GB)"
         Invoke-PullModel "snowflake-arctic-embed2" "Snowflake Arctic Embed 2.0 (1.7 GB)"
 
         # Vision/Multimodal Models
@@ -379,7 +378,6 @@ switch ($Mode) {
         Write-Info "Pulling EMBEDDING models (for RAG and semantic search)"
         Write-Host ""
 
-        Invoke-PullModel "snowflake-arctic-embed" "Snowflake Arctic Embed (1 GB)"
         Invoke-PullModel "snowflake-arctic-embed2" "Snowflake Arctic Embed 2.0 (1.7 GB)"
     }
 

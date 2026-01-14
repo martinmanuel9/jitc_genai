@@ -24,7 +24,7 @@ from llm_config.llm_config import (
 )
 
 # Embedding Model Configuration
-EMBEDDING_MODEL_NAME = "snowflake-arctic-embed-m"
+EMBEDDING_MODEL_NAME = "snowflake-arctic-embed2"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
 # Document Processing Defaults

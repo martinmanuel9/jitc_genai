@@ -217,7 +217,7 @@ pull_auto_models() {
             pull_model "llama3.2:1b" "Meta's smallest - CPU optimized (1.3 GB)"
             pull_model "llama3.2:3b" "Meta's balanced small model (2 GB)"
             pull_model "phi3:mini" "Microsoft's efficient model (2.3 GB)"
-            pull_model "snowflake-arctic-embed-m" "Snowflake embeddings M (1.4 GB)"
+            pull_model "snowflake-arctic-embed2" "Snowflake embeddings v2 (1.7 GB)"
             # Vision model for low VRAM
             pull_model "granite3.2-vision:2b" "IBM Granite Vision - lightweight multimodal (1.5 GB)"
             ;;
@@ -227,7 +227,7 @@ pull_auto_models() {
             pull_model "llama3.2:3b" "Meta's balanced small model (2 GB)"
             pull_model "llama3.1:8b" "Meta's powerful 8B model (4.7 GB)"
             pull_model "phi3:mini" "Microsoft's efficient model (2.3 GB)"
-            pull_model "snowflake-arctic-embed-m" "Snowflake embeddings M (1.4 GB)"
+            pull_model "snowflake-arctic-embed2" "Snowflake embeddings v2 (1.7 GB)"
             # Vision models for moderate VRAM
             pull_model "granite3.2-vision:2b" "IBM Granite Vision - lightweight multimodal (1.5 GB)"
             pull_model "llava:7b" "LLaVA 1.6 7B - vision-language model (4.7 GB)"
@@ -239,7 +239,7 @@ pull_auto_models() {
             pull_model "llama3:8b" "Meta Llama 3 8B (4.7 GB)"
             pull_model "phi3:mini" "Microsoft Phi-3 Mini (2.3 GB)"
             pull_model "phi3:medium" "Microsoft Phi-3 Medium (7.9 GB)"
-            pull_model "snowflake-arctic-embed-m" "Snowflake Arctic Embed M (1.4 GB)"
+            pull_model "snowflake-arctic-embed2" "Snowflake Arctic Embed 2.0 (1.7 GB)"
             # Vision models for high VRAM
             pull_model "llava:7b" "LLaVA 1.6 7B - vision-language model (4.7 GB)"
             pull_model "llava:13b" "LLaVA 1.6 13B - larger multimodal (8 GB)"
@@ -258,14 +258,14 @@ pull_auto_models() {
                 pull_model "llama3:8b" "Meta Llama 3 8B (4.7 GB)"
                 pull_model "phi3:mini" "Microsoft Phi-3 Mini (2.3 GB)"
                 pull_model "phi3:medium" "Microsoft Phi-3 Medium (7.9 GB)"
-                pull_model "snowflake-arctic-embed-m" "Snowflake Arctic Embed M (1.4 GB)"
+                pull_model "snowflake-arctic-embed2" "Snowflake Arctic Embed 2.0 (1.7 GB)"
             else
                 # Enterprise set without 70B
                 pull_model "llama3.1:8b" "Meta Llama 3.1 8B (4.7 GB)"
                 pull_model "llama3:8b" "Meta Llama 3 8B (4.7 GB)"
                 pull_model "phi3:mini" "Microsoft Phi-3 Mini (2.3 GB)"
                 pull_model "phi3:medium" "Microsoft Phi-3 Medium (7.9 GB)"
-                pull_model "snowflake-arctic-embed-m" "Snowflake Arctic Embed M (1.4 GB)"
+                pull_model "snowflake-arctic-embed2" "Snowflake Arctic Embed 2.0 (1.7 GB)"
             fi
             # All vision models for enterprise
             pull_model "granite3.2-vision:2b" "IBM Granite Vision - lightweight multimodal (1.5 GB)"
@@ -307,7 +307,7 @@ case "$MODE" in
         pull_model "llama3.2:1b" "Meta's smallest (1.3 GB)"
         pull_model "llama3.2:3b" "Meta's balanced (2 GB)"
         pull_model "phi3:mini" "Microsoft's efficient (2.3 GB)"
-        pull_model "snowflake-arctic-embed-m" "Snowflake embeddings (1.4 GB)"
+        pull_model "snowflake-arctic-embed2" "Snowflake embeddings v2 (1.7 GB)"
         ;;
 
     recommended)
@@ -347,7 +347,7 @@ case "$MODE" in
         pull_model "phi3:medium" "Microsoft Phi-3 Medium (7.9 GB)"
 
         # Snowflake Embeddings
-        pull_model "snowflake-arctic-embed-m" "Snowflake Arctic Embed M (1.4 GB)"
+        pull_model "snowflake-arctic-embed2" "Snowflake Arctic Embed 2.0 (1.7 GB)"
 
         # Vision/Multimodal Models
         pull_model "granite3.2-vision:2b" "IBM Granite Vision 2B (1.5 GB)"
@@ -359,7 +359,7 @@ case "$MODE" in
         print_info "Pulling EMBEDDING models (for RAG and semantic search)"
         echo ""
 
-        pull_model "snowflake-arctic-embed-m" "Snowflake Arctic Embed M (1.4 GB)"
+        pull_model "snowflake-arctic-embed2" "Snowflake Arctic Embed 2.0 (1.7 GB)"
         ;;
 
     vision)

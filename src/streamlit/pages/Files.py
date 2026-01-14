@@ -27,7 +27,7 @@ if "collections" not in st.session_state:
 def load_embedding_model():
     ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
     return OllamaEmbeddings(
-        model="snowflake-arctic-embed-m",
+        model="snowflake-arctic-embed2",
         base_url=ollama_url
     )
 
