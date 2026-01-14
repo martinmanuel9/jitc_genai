@@ -153,10 +153,13 @@ function Invoke-DockerBuild {
         [Parameter(Mandatory=$true)]
         [string]$WorkingDirectory,
         [string]$ServiceName = "",
-        [int]$TimeoutMinutes = 25
+        [int]$TimeoutMinutes = 25,
+        [switch]$NoCache = $false
     )
 
-    $buildCommand = if ($ServiceName) { "docker compose build $ServiceName" } else { "docker compose build" }
+    # Use --no-cache for base-poetry-deps to ensure all dependencies are installed fresh
+    $noCacheFlag = if ($NoCache -or $ServiceName -eq "base-poetry-deps") { "--no-cache " } else { "" }
+    $buildCommand = if ($ServiceName) { "docker compose build ${noCacheFlag}$ServiceName" } else { "docker compose build" }
     $displayName = if ($ServiceName) { $ServiceName } else { "all services" }
 
     Write-Log "Building: $displayName"
