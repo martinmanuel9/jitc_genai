@@ -46,8 +46,8 @@ Group=root
 # Load environment
 EnvironmentFile=-/opt/jitc_genai/.env
 
-# Build base image first, then start all services
-ExecStart=/bin/bash -c '/usr/bin/docker compose build base-poetry-deps && /usr/bin/docker compose up -d'
+# Build base image first (with --no-cache to ensure all dependencies), then start all services
+ExecStart=/bin/bash -c '/usr/bin/docker compose build --no-cache base-poetry-deps && /usr/bin/docker compose up -d'
 
 # Stop services
 ExecStop=/usr/bin/docker compose down

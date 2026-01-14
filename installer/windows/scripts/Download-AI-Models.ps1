@@ -172,9 +172,9 @@ if ($InstallDir) {
             Write-Host "[INFO] Building Docker images (first time setup - this may take 10-20 minutes)..." -ForegroundColor Yellow
             Write-Host ""
 
-            # Build base-poetry-deps first
+            # Build base-poetry-deps first (with --no-cache to ensure all dependencies are installed)
             Write-Host ">>> Building base-poetry-deps..." -ForegroundColor Cyan
-            docker compose build base-poetry-deps 2>&1 | ForEach-Object { Write-Host $_ }
+            docker compose build --no-cache base-poetry-deps 2>&1 | ForEach-Object { Write-Host $_ }
 
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "[ERROR] Failed to build base-poetry-deps" -ForegroundColor Red
