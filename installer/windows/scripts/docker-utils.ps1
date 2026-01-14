@@ -349,6 +349,10 @@ function Invoke-FullBuildWorkflow {
         # Build base-poetry-deps
         Write-LogStep "Building base-poetry-deps"
 
+        # Remove any existing base image to ensure a completely fresh build
+        Write-Log "Removing old base image (if exists)..."
+        docker rmi base-poetry-deps -f 2>&1 | Out-Null
+
         if (-not (Invoke-DockerBuild -WorkingDirectory $InstallDir -ServiceName "base-poetry-deps" -TimeoutMinutes 25)) {
             Write-LogError "Failed to build base-poetry-deps"
             return $false

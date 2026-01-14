@@ -172,6 +172,10 @@ if ($InstallDir) {
             Write-Host "[INFO] Building Docker images (first time setup - this may take 10-20 minutes)..." -ForegroundColor Yellow
             Write-Host ""
 
+            # Remove any existing base image to ensure a completely fresh build
+            Write-Host "[INFO] Removing old base image (if exists)..." -ForegroundColor Yellow
+            docker rmi base-poetry-deps -f 2>&1 | Out-Null
+
             # Build base-poetry-deps first (with --no-cache to ensure all dependencies are installed)
             Write-Host ">>> Building base-poetry-deps..." -ForegroundColor Cyan
             docker compose build --no-cache base-poetry-deps 2>&1 | ForEach-Object { Write-Host $_ }

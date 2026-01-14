@@ -524,6 +524,10 @@ Write-Host ""
 Write-Log ">>> Building base-poetry-deps..." -Color Cyan
 Write-Host ""
 
+# Remove any existing base image to ensure a completely fresh build
+Write-Log "Removing old base image (if exists)..." -Color Yellow
+docker rmi base-poetry-deps -f 2>&1 | Out-Null
+
 $baseBuildStart = Get-Date
 # Use --no-cache to ensure all dependencies are freshly installed from poetry.lock
 docker compose build --no-cache base-poetry-deps 2>&1 | ForEach-Object {
