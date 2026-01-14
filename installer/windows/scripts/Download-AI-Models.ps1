@@ -157,46 +157,39 @@ if ($InstallDir) {
         Write-Host "[INFO] Starting Docker containers..." -ForegroundColor Yellow
         Write-Host ""
 
-        # Check if images need to be built
-        $images = docker images --format "{{.Repository}}" 2>&1
-        $needsBuild = $true
+        # Always rebuild base-poetry-deps to ensure all dependencies are installed
+        # This is critical for ensuring packages like streamlit-quill are present
+        Write-Host "[INFO] Rebuilding Docker images to ensure all dependencies are installed..." -ForegroundColor Yellow
+        Write-Host ""
 
-        foreach ($img in $images) {
-            if ($img -match "genai" -or $img -match "fastapi" -or $img -match "streamlit") {
-                $needsBuild = $false
-                break
-            }
+        # Stop any existing containers first
+        Write-Host "[INFO] Stopping any existing containers..." -ForegroundColor Yellow
+        docker compose down 2>&1 | Out-Null
+
+        # Remove any existing base image to ensure a completely fresh build
+        Write-Host "[INFO] Removing old base image (if exists)..." -ForegroundColor Yellow
+        docker rmi base-poetry-deps -f 2>&1 | Out-Null
+
+        # Build base-poetry-deps first (with --no-cache to ensure all dependencies are installed)
+        Write-Host ">>> Building base-poetry-deps..." -ForegroundColor Cyan
+        docker compose build --no-cache base-poetry-deps 2>&1 | ForEach-Object { Write-Host $_ }
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[ERROR] Failed to build base-poetry-deps" -ForegroundColor Red
+            Write-Host "Press any key to continue anyway..."
+            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         }
 
-        if ($needsBuild) {
-            Write-Host "[INFO] Building Docker images (first time setup - this may take 10-20 minutes)..." -ForegroundColor Yellow
-            Write-Host ""
+        Write-Host ""
+        Write-Host ">>> Building application services..." -ForegroundColor Cyan
+        docker compose build 2>&1 | ForEach-Object { Write-Host $_ }
 
-            # Remove any existing base image to ensure a completely fresh build
-            Write-Host "[INFO] Removing old base image (if exists)..." -ForegroundColor Yellow
-            docker rmi base-poetry-deps -f 2>&1 | Out-Null
-
-            # Build base-poetry-deps first (with --no-cache to ensure all dependencies are installed)
-            Write-Host ">>> Building base-poetry-deps..." -ForegroundColor Cyan
-            docker compose build --no-cache base-poetry-deps 2>&1 | ForEach-Object { Write-Host $_ }
-
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "[ERROR] Failed to build base-poetry-deps" -ForegroundColor Red
-                Write-Host "Press any key to continue anyway..."
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-            }
-
-            Write-Host ""
-            Write-Host ">>> Building application services..." -ForegroundColor Cyan
-            docker compose build 2>&1 | ForEach-Object { Write-Host $_ }
-
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "[ERROR] Failed to build application services" -ForegroundColor Red
-                Write-Host "Press any key to continue anyway..."
-                $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-            }
-            Write-Host ""
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[ERROR] Failed to build application services" -ForegroundColor Red
+            Write-Host "Press any key to continue anyway..."
+            $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         }
+        Write-Host ""
 
         # Start containers
         Write-Host "[INFO] Starting services with docker compose up -d..." -ForegroundColor Yellow
